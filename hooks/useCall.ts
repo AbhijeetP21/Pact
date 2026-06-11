@@ -5,10 +5,7 @@ import { useRouter } from 'next/navigation'
 import { nanoid } from 'nanoid'
 
 import { PeerManager } from '@/lib/webrtc/PeerManager'
-import {
-  countRoomPeers,
-  SignalingService,
-} from '@/lib/webrtc/SignalingService'
+import { SignalingService } from '@/lib/webrtc/SignalingService'
 import { useMedia } from '@/hooks/useMedia'
 import { useParticipants } from '@/hooks/useParticipants'
 import { rtcError, rtcLog } from '@/lib/webrtc/log'
@@ -250,11 +247,8 @@ export function useCall({
 
       peerManagerRef.current = buildPeerManager(localStream)
 
-      // Pre-join headcount so the lobby can show "room full" before joining.
-      const count = await countRoomPeers(slug)
-      if (cancelledRef.current) return
-      if (count >= maxParticipants) setRoomFull(true)
-
+      // Media + managers ready → show the lobby. Capacity is enforced at
+      // join time (see the currentRoster check in join()).
       setCallStatus('idle')
     }
 

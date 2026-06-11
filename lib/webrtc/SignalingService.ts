@@ -152,46 +152,6 @@ export class SignalingService {
   }
 }
 
-/**
- * Count the peers currently present in a room without joining it. Subscribes
- * read-only (no presence track), reads the first sync, then tears down. Used
- * for max-participant enforcement before a user joins. Resolves 0 on failure
- * so a transient error never blocks a legitimate join.
- */
-export async function countRoomPeers(slug: string): Promise<number> {
-  const supabase = createClient()
-  const channel = supabase.channel(`room:${slug}`, {
-    config: { broadcast: { self: false } },
-  })
-
-  return new Promise<number>((resolve) => {
-    let done = false
-    const finish = (count: number) => {
-      if (done) return
-      done = true
-      void supabase.removeChannel(channel)
-      resolve(count)
-    }
-
-    channel.on('presence', { event: 'sync' }, () => {
-      finish(Object.keys(channel.presenceState()).length)
-    })
-
-    channel.subscribe((status) => {
-      if (
-        status === 'CHANNEL_ERROR' ||
-        status === 'TIMED_OUT' ||
-        status === 'CLOSED'
-      ) {
-        finish(0)
-      }
-    })
-
-    // Safety net if no sync arrives.
-    setTimeout(() => finish(0), 4000)
-  })
-}
-
 /** Compact, log-friendly description of a simple-peer signal payload. */
 function describeSignal(data: unknown): string {
   if (data && typeof data === 'object' && 'type' in data) {
