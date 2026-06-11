@@ -17,7 +17,7 @@ export function ShareLinkCard({ url }: { url: string }) {
       toast.success('Link copied to clipboard')
       window.setTimeout(() => setCopied(false), 2000)
     } catch {
-      toast.error('Could not copy automatically — select and copy the link.')
+      toast.error('Could not copy automatically. Select and copy the link.')
     }
   }
 

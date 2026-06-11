@@ -1,6 +1,6 @@
 'use client'
 
-import { MicOff, VideoOff } from 'lucide-react'
+import { Maximize2, MicOff, VideoOff } from 'lucide-react'
 
 import { useAudioLevel } from '@/hooks/useAudioLevel'
 import { cn, initialsFromName } from '@/lib/utils'
@@ -18,11 +18,19 @@ export function VideoTile({
   participant,
   mirror,
   localSpeaking,
+  objectFit = 'cover',
+  compact = false,
+  onExpand,
 }: {
   participant: Participant
   mirror: boolean
   /** Pre-computed speaking state for the local tile (avoids a 2nd AudioContext). */
   localSpeaking?: boolean
+  objectFit?: 'cover' | 'contain'
+  /** Smaller overlays for thumbnail/PiP use. */
+  compact?: boolean
+  /** When set, shows a hover "expand" button that spotlights this tile. */
+  onExpand?: () => void
 }) {
   const showVideo = Boolean(participant.videoEnabled && participant.stream)
 
@@ -50,23 +58,39 @@ export function VideoTile({
           stream={participant.stream}
           muted={participant.isLocal}
           mirror={mirror}
+          objectFit={objectFit}
         />
       ) : (
         <div className="flex size-full items-center justify-center">
           <Avatar
             className={cn(
-              'size-20 transition-transform',
+              'transition-transform',
+              compact ? 'size-10' : 'size-20',
               speaking && 'ring-2 ring-primary',
             )}
           >
             {participant.avatarUrl ? (
               <AvatarImage src={participant.avatarUrl} alt={participant.displayName} />
             ) : null}
-            <AvatarFallback className="text-2xl">
+            <AvatarFallback className={compact ? 'text-sm' : 'text-2xl'}>
               {initialsFromName(participant.displayName)}
             </AvatarFallback>
           </Avatar>
         </div>
+      )}
+
+      {onExpand && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onExpand()
+          }}
+          aria-label="Expand"
+          className="absolute left-2 top-2 hidden rounded-md bg-black/55 p-1.5 text-white backdrop-blur transition-colors hover:bg-black/75 group-hover:block"
+        >
+          <Maximize2 className="size-3.5" />
+        </button>
       )}
 
       {/* Top-right status: connection (remote) + camera-off indicator. */}
@@ -84,9 +108,14 @@ export function VideoTile({
       </div>
 
       {/* Bottom-left: name + mic state. */}
-      <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-md bg-black/50 px-2 py-1 text-xs text-white backdrop-blur">
+      <div
+        className={cn(
+          'absolute bottom-2 left-2 flex items-center gap-1.5 rounded-md bg-black/50 px-2 py-1 text-white backdrop-blur',
+          compact ? 'text-[10px]' : 'text-xs',
+        )}
+      >
         {!participant.audioEnabled && <MicOff className="size-3 text-red-400" />}
-        <span className="max-w-[12rem] truncate">
+        <span className={cn('truncate', compact ? 'max-w-[6rem]' : 'max-w-[12rem]')}>
           {participant.displayName}
           {participant.isLocal ? ' (You)' : ''}
         </span>

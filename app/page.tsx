@@ -56,13 +56,13 @@ export default async function Home() {
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center gap-10 px-6 py-16 text-center">
         <div className="space-y-6">
           <h1 className="text-balance text-5xl font-semibold leading-[1.05] tracking-tight sm:text-6xl">
-            Private calls.
+            Truly private
             <br />
-            For people who trust each other.
+            video calls.
           </h1>
           <p className="mx-auto max-w-xl text-balance text-lg text-muted-foreground">
             End-to-end encrypted video for groups of up to five. Your audio and
-            video travel directly between devices — never through a server.
+            video travel directly between devices, never through a server.
           </p>
         </div>
 
@@ -96,7 +96,7 @@ export default async function Home() {
       </main>
 
       <footer className="mx-auto w-full max-w-5xl px-6 py-8 text-center text-xs text-muted-foreground">
-        Pact — a serverless, end-to-end encrypted calling demo.
+        Pact. A serverless, end-to-end encrypted calling demo.
       </footer>
     </div>
   )

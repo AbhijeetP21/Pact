@@ -18,11 +18,13 @@ export function StreamVideo({
   stream,
   muted,
   mirror,
+  objectFit = 'cover',
   className,
 }: {
   stream: MediaStream | null
   muted: boolean
   mirror?: boolean
+  objectFit?: 'cover' | 'contain'
   className?: string
 }) {
   const ref = useRef<HTMLVideoElement>(null)
@@ -59,7 +61,12 @@ export function StreamVideo({
       autoPlay
       playsInline
       muted={muted}
-      className={cn('size-full object-cover', mirror && '-scale-x-100', className)}
+      className={cn(
+        'size-full',
+        objectFit === 'contain' ? 'object-contain' : 'object-cover',
+        mirror && '-scale-x-100',
+        className,
+      )}
     />
   )
 }

@@ -1,8 +1,16 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ArrowRight, AudioLines, Loader2, MonitorX, Users } from 'lucide-react'
+import {
+  ArrowRight,
+  AudioLines,
+  Loader2,
+  Maximize,
+  Minimize,
+  MonitorX,
+  Users,
+} from 'lucide-react'
 
 import { useCall } from '@/hooks/useCall'
 import { useAudioLevel } from '@/hooks/useAudioLevel'
@@ -12,6 +20,7 @@ import { Button, buttonVariants } from '@/components/ui/button'
 import { ControlBar } from '@/components/call/ControlBar'
 import { LocalPreview } from '@/components/call/LocalPreview'
 import { ParticipantGrid } from '@/components/call/ParticipantGrid'
+import { SpotlightView } from '@/components/call/SpotlightView'
 
 export type RoomClientProps = {
   slug: string
@@ -64,6 +73,7 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
     callStatus,
     inLobby,
     roomFull,
+    selfPeerId,
     join,
     toggleAudio,
     toggleVideo,
@@ -78,6 +88,42 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
     mediaState.localStream,
     mediaState.audioEnabled,
   )
+
+  // Spotlight (speaker view) + fullscreen.
+  const rootRef = useRef<HTMLDivElement>(null)
+  const [focusedPeerId, setFocusedPeerId] = useState<string | null>(null)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  // Auto-spotlight our own screen share while it's active.
+  useEffect(() => {
+    if (mediaState.screenSharing) setFocusedPeerId(selfPeerId)
+    else setFocusedPeerId((prev) => (prev === selfPeerId ? null : prev))
+  }, [mediaState.screenSharing, selfPeerId])
+
+  // Drop focus if the spotlighted participant leaves.
+  useEffect(() => {
+    if (focusedPeerId && !participants.some((p) => p.peerId === focusedPeerId)) {
+      setFocusedPeerId(null)
+    }
+  }, [participants, focusedPeerId])
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement))
+    document.addEventListener('fullscreenchange', onChange)
+    return () => document.removeEventListener('fullscreenchange', onChange)
+  }, [])
+
+  function toggleFullscreen() {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {})
+    } else {
+      void rootRef.current?.requestFullscreen().catch(() => {})
+    }
+  }
+
+  const isSpotlight =
+    focusedPeerId !== null &&
+    participants.some((p) => p.peerId === focusedPeerId)
 
   if (callStatus === 'acquiring-media') {
     return (
@@ -188,7 +234,7 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
 
   // Active call (connecting / connected / reconnecting).
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div ref={rootRef} className="flex min-h-dvh flex-col bg-background">
       <header className="flex items-center justify-between gap-4 px-6 py-4">
         <div>
           <h1 className="text-sm font-medium">{roomName ?? 'Private room'}</h1>
@@ -197,29 +243,58 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
             {participants.length} / {maxParticipants}
           </p>
         </div>
-        <Badge variant="outline" className="gap-1.5">
-          <span
-            className={cn(
-              'inline-block size-1.5 rounded-full',
-              callStatus === 'connected'
-                ? 'bg-green-500'
-                : 'animate-pulse bg-amber-500',
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="gap-1.5">
+            <span
+              className={cn(
+                'inline-block size-1.5 rounded-full',
+                callStatus === 'connected'
+                  ? 'bg-green-500'
+                  : 'animate-pulse bg-amber-500',
+              )}
+            />
+            {callStatus === 'connected'
+              ? 'Connected'
+              : callStatus === 'reconnecting'
+                ? 'Reconnecting…'
+                : 'Connecting…'}
+          </Badge>
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            className="flex size-8 items-center justify-center rounded-md border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            {isFullscreen ? (
+              <Minimize className="size-4" />
+            ) : (
+              <Maximize className="size-4" />
             )}
-          />
-          {callStatus === 'connected'
-            ? 'Connected'
-            : callStatus === 'reconnecting'
-              ? 'Reconnecting…'
-              : 'Connecting…'}
-        </Badge>
+          </button>
+        </div>
       </header>
 
-      <main className="flex flex-1 items-center justify-center px-4 pb-28">
-        <ParticipantGrid
-          participants={participants}
-          screenSharing={mediaState.screenSharing}
-          localSpeaking={localSpeaking}
-        />
+      <main className="flex flex-1 items-stretch justify-center px-4 pb-28">
+        {isSpotlight && focusedPeerId ? (
+          <SpotlightView
+            participants={participants}
+            focusedPeerId={focusedPeerId}
+            screenSharing={mediaState.screenSharing}
+            localSpeaking={localSpeaking}
+            onFocus={setFocusedPeerId}
+            onExit={() => setFocusedPeerId(null)}
+          />
+        ) : (
+          <div className="flex w-full items-center justify-center">
+            <ParticipantGrid
+              participants={participants}
+              screenSharing={mediaState.screenSharing}
+              localSpeaking={localSpeaking}
+              onFocus={setFocusedPeerId}
+            />
+          </div>
+        )}
       </main>
 
       <ControlBar

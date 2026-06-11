@@ -19,7 +19,7 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Pact — Private P2P video calls',
+  title: 'Pact: Private P2P video calls',
   description:
     'End-to-end encrypted video calls for small groups. Media travels peer-to-peer and never touches a server.',
 }

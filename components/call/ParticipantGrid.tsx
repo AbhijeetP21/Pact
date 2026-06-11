@@ -14,10 +14,12 @@ export function ParticipantGrid({
   participants,
   screenSharing,
   localSpeaking,
+  onFocus,
 }: {
   participants: Participant[]
   screenSharing: boolean
   localSpeaking: boolean
+  onFocus?: (peerId: string) => void
 }) {
   const count = participants.length
 
@@ -38,6 +40,7 @@ export function ParticipantGrid({
             participant={p}
             mirror={p.isLocal && !screenSharing}
             localSpeaking={p.isLocal ? localSpeaking : undefined}
+            onExpand={onFocus ? () => onFocus(p.peerId) : undefined}
           />
         </div>
       ))}

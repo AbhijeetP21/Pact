@@ -22,7 +22,7 @@ export default function GlobalError({
           Something went wrong
         </h1>
         <p className="max-w-sm text-muted-foreground">
-          An unexpected error occurred. You can try again — if it persists,
+          An unexpected error occurred. You can try again. If it persists,
           reload the page.
         </p>
       </div>

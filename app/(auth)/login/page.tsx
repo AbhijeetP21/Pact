@@ -26,7 +26,7 @@ export default function LoginPage() {
           <CardHeader className="text-center">
             <CardTitle>Sign in to Pact</CardTitle>
             <CardDescription>
-              Private, end-to-end encrypted calls for people who trust each other.
+              Private, end-to-end encrypted video calls for your small group.
             </CardDescription>
           </CardHeader>
           <CardContent>
