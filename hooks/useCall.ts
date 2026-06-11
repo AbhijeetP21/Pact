@@ -1,0 +1,438 @@
+'use client'
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { nanoid } from 'nanoid'
+
+import { PeerManager } from '@/lib/webrtc/PeerManager'
+import {
+  countRoomPeers,
+  SignalingService,
+} from '@/lib/webrtc/SignalingService'
+import { useMedia } from '@/hooks/useMedia'
+import { useParticipants } from '@/hooks/useParticipants'
+import { rtcError, rtcLog } from '@/lib/webrtc/log'
+import type {
+  CallStatus,
+  MediaState,
+  Participant,
+  PresencePayload,
+} from '@/types'
+
+// Client-side fallback if /api/ice-servers is unavailable — STUN still enables
+// most same-network and many NAT-traversal connections.
+const FALLBACK_ICE: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+]
+
+// Delay before recreating a peer whose ICE connection failed.
+const RECONNECT_DELAY_MS = 2000
+
+export type UseCallParams = {
+  slug: string
+  maxParticipants: number
+  user: { id: string; displayName: string; avatarUrl: string | null }
+}
+
+export type UseCallReturn = {
+  participants: Participant[]
+  localStream: MediaStream | null
+  mediaState: MediaState
+  callStatus: CallStatus
+  selfPeerId: string
+  /** Media ready, lobby shown, but not yet connected to the room. */
+  inLobby: boolean
+  /** Room is at capacity — joining is blocked. */
+  roomFull: boolean
+  join: () => Promise<void>
+  toggleAudio: () => void
+  toggleVideo: () => void
+  toggleNoiseSuppression: () => Promise<void>
+  startScreenShare: () => Promise<void>
+  stopScreenShare: () => void
+  leaveCall: () => Promise<void>
+}
+
+async function fetchIceServers(): Promise<RTCIceServer[]> {
+  try {
+    const res = await fetch('/api/ice-servers')
+    if (!res.ok) throw new Error(`status ${res.status}`)
+    const data = (await res.json()) as { iceServers?: RTCIceServer[] }
+    return data.iceServers?.length ? data.iceServers : FALLBACK_ICE
+  } catch (err) {
+    rtcError('Call', 'ICE fetch failed; using STUN fallback', err)
+    return FALLBACK_ICE
+  }
+}
+
+export function useCall({
+  slug,
+  maxParticipants,
+  user,
+}: UseCallParams): UseCallReturn {
+  const router = useRouter()
+  const media = useMedia()
+  const {
+    participants,
+    upsertFromPresence,
+    patch,
+    setStream,
+    setConnectionState,
+    remove,
+    clearRemote,
+    reset,
+  } = useParticipants()
+
+  // Starts in 'acquiring-media'; becomes 'idle' (lobby) once media is ready,
+  // then 'connecting' → 'connected' after the user joins.
+  const [callStatus, setCallStatus] = useState<CallStatus>('acquiring-media')
+  const [roomFull, setRoomFull] = useState(false)
+
+  // Stable identity for this session.
+  const [self] = useState<PresencePayload>(() => ({
+    peerId: nanoid(12),
+    userId: user.id,
+    displayName: user.displayName,
+    avatarUrl: user.avatarUrl,
+    joinedAt: new Date().toISOString(),
+  }))
+
+  const signalingRef = useRef<SignalingService | null>(null)
+  const peerManagerRef = useRef<PeerManager | null>(null)
+  const iceServersRef = useRef<RTCIceServer[]>(FALLBACK_ICE)
+  const joinedAtRef = useRef<Map<string, string>>(new Map())
+  const creatingRef = useRef<Map<string, Promise<void>>>(new Map())
+  const pendingStreamsRef = useRef<Map<string, MediaStream>>(new Map())
+  const reconnectTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  )
+  const cancelledRef = useRef(false)
+
+  // Later joiner initiates: I initiate toward a peer iff my joinedAt is later
+  // (ties broken by peerId) — exactly one side of each pair initiates.
+  const isInitiator = useCallback(
+    (theirJoinedAt: string, theirPeerId: string): boolean => {
+      if (self.joinedAt !== theirJoinedAt) return self.joinedAt > theirJoinedAt
+      return self.peerId > theirPeerId
+    },
+    [self],
+  )
+
+  const flushPendingStream = useCallback(
+    (peerId: string) => {
+      const stream = pendingStreamsRef.current.get(peerId)
+      if (stream) {
+        setStream(peerId, stream)
+        pendingStreamsRef.current.delete(peerId)
+      }
+    },
+    [setStream],
+  )
+
+  const ensurePeer = useCallback(
+    async (peerId: string, joinedAt: string | undefined) => {
+      const pm = peerManagerRef.current
+      if (!pm || pm.hasPeer(peerId)) return
+
+      const inFlight = creatingRef.current.get(peerId)
+      if (inFlight) return inFlight
+
+      const initiator = joinedAt ? isInitiator(joinedAt, peerId) : false
+      if (joinedAt) joinedAtRef.current.set(peerId, joinedAt)
+
+      const promise = pm.createPeer(peerId, initiator).finally(() => {
+        creatingRef.current.delete(peerId)
+      })
+      creatingRef.current.set(peerId, promise)
+      return promise
+    },
+    [isInitiator],
+  )
+
+  const clearReconnect = useCallback((peerId: string) => {
+    const timer = reconnectTimersRef.current.get(peerId)
+    if (timer) {
+      clearTimeout(timer)
+      reconnectTimersRef.current.delete(peerId)
+    }
+  }, [])
+
+  // On ICE failure, recreate the peer after a short delay (if it's still in the
+  // room). Deterministic initiator roles mean the handshake re-establishes
+  // cleanly without glare.
+  const scheduleReconnect = useCallback(
+    (peerId: string) => {
+      if (reconnectTimersRef.current.has(peerId)) return
+      const timer = setTimeout(() => {
+        reconnectTimersRef.current.delete(peerId)
+        const joinedAt = joinedAtRef.current.get(peerId)
+        const pm = peerManagerRef.current
+        if (cancelledRef.current || !joinedAt || !pm) return
+        rtcLog('Call', `reconnecting peer ${peerId} after ICE failure`)
+        void pm.createPeer(peerId, isInitiator(joinedAt, peerId))
+      }, RECONNECT_DELAY_MS)
+      reconnectTimersRef.current.set(peerId, timer)
+    },
+    [isInitiator],
+  )
+
+  /** Add/refresh a presence member: roster entry + peer + any pending stream. */
+  const admitMember = useCallback(
+    (payload: PresencePayload) => {
+      upsertFromPresence(payload)
+      joinedAtRef.current.set(payload.peerId, payload.joinedAt)
+      flushPendingStream(payload.peerId)
+      // A peer can connect *before* its presence entry registers (its offer
+      // arrives via broadcast first). Connection-state updates fired before the
+      // roster entry existed were dropped, so re-sync from the live pc here.
+      const pc = peerManagerRef.current?.getRTCPeerConnection(payload.peerId)
+      if (pc) setConnectionState(payload.peerId, pc.connectionState)
+      void ensurePeer(payload.peerId, payload.joinedAt)
+    },
+    [upsertFromPresence, flushPendingStream, setConnectionState, ensurePeer],
+  )
+
+  const buildPeerManager = useCallback(
+    (localStream: MediaStream) => {
+      const peerManager = new PeerManager(iceServersRef.current, {
+        onSignal: (peerId, data) => {
+          void signalingRef.current?.sendSignal(peerId, data)
+        },
+        onStream: (peerId, stream) => {
+          setStream(peerId, stream)
+          pendingStreamsRef.current.set(peerId, stream)
+        },
+        onConnectionStateChange: (peerId, state) => {
+          setConnectionState(peerId, state)
+          if (state === 'failed') scheduleReconnect(peerId)
+          else if (state === 'connected') clearReconnect(peerId)
+        },
+        onClose: (peerId) => {
+          setConnectionState(peerId, 'closed')
+        },
+        onError: (peerId, err) => {
+          rtcError('Call', `peer ${peerId} error`, err.message)
+          setConnectionState(peerId, 'failed')
+        },
+      })
+      peerManager.setLocalStream(localStream)
+      return peerManager
+    },
+    [setStream, setConnectionState, scheduleReconnect, clearReconnect],
+  )
+
+  // ---- Phase 1: acquire media + prepare managers (lobby), no signaling yet ----
+  useEffect(() => {
+    cancelledRef.current = false
+    setRoomFull(false)
+
+    async function prepare() {
+      setCallStatus('acquiring-media')
+
+      let localStream: MediaStream
+      try {
+        localStream = await media.acquireLocalStream()
+      } catch (err) {
+        if (cancelledRef.current) return
+        rtcError('Call', 'media acquisition failed', err)
+        setCallStatus('error')
+        return
+      }
+      if (cancelledRef.current) return
+
+      upsertFromPresence(self, { isLocal: true })
+      setStream(self.peerId, localStream)
+
+      iceServersRef.current = await fetchIceServers()
+      if (cancelledRef.current) return
+
+      peerManagerRef.current = buildPeerManager(localStream)
+
+      // Pre-join headcount so the lobby can show "room full" before joining.
+      const count = await countRoomPeers(slug)
+      if (cancelledRef.current) return
+      if (count >= maxParticipants) setRoomFull(true)
+
+      setCallStatus('idle')
+    }
+
+    void prepare()
+
+    return () => {
+      cancelledRef.current = true
+      reconnectTimersRef.current.forEach((t) => clearTimeout(t))
+      reconnectTimersRef.current.clear()
+      peerManagerRef.current?.destroyAll()
+      peerManagerRef.current = null
+      void signalingRef.current?.leave()
+      signalingRef.current = null
+      media.stopAll()
+      joinedAtRef.current.clear()
+      creatingRef.current.clear()
+      pendingStreamsRef.current.clear()
+      reset()
+      setCallStatus('acquiring-media')
+    }
+    // Run once per room mount; all dependencies are stable refs/callbacks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug])
+
+  const buildSignaling = useCallback(() => {
+    return new SignalingService(self.peerId, {
+      onPresenceSync: (existing) => existing.forEach(admitMember),
+      onParticipantJoined: (participant) => admitMember(participant),
+      onParticipantLeft: (peerId) => {
+        clearReconnect(peerId)
+        peerManagerRef.current?.removePeer(peerId)
+        joinedAtRef.current.delete(peerId)
+        pendingStreamsRef.current.delete(peerId)
+        remove(peerId)
+      },
+      onSignalReceived: async (fromPeerId, data) => {
+        // Guard the signal-before-presence race: a peer may broadcast an offer
+        // to us before our presence sync registers them. They are the
+        // initiator, so we create our (non-initiator) side on demand.
+        await ensurePeer(fromPeerId, joinedAtRef.current.get(fromPeerId))
+        peerManagerRef.current?.signal(fromPeerId, data)
+      },
+    })
+  }, [self, admitMember, ensurePeer, remove, clearReconnect])
+
+  // ---- Phase 2: join the room signaling channel (called from the lobby) ----
+  const join = useCallback(async () => {
+    if (signalingRef.current || !peerManagerRef.current) return
+
+    const signaling = buildSignaling()
+
+    setCallStatus('connecting')
+    try {
+      await signaling.join(slug, self)
+    } catch (err) {
+      if (cancelledRef.current) return
+      rtcError('Call', 'signaling join failed', err)
+      setCallStatus('error')
+      return
+    }
+    if (cancelledRef.current) {
+      void signaling.leave()
+      return
+    }
+
+    // Join-time safeguard against the headcount race: if the room filled while
+    // we were connecting, back out cleanly.
+    if (signaling.currentRoster().length >= maxParticipants) {
+      await signaling.leave()
+      setRoomFull(true)
+      setCallStatus('idle')
+      return
+    }
+
+    signalingRef.current = signaling
+    setCallStatus('connected')
+    rtcLog('Call', `joined room ${slug} as ${self.peerId}`)
+  }, [slug, self, maxParticipants, buildSignaling])
+
+  // ---- Network resilience: rejoin on reconnect ----
+  const rejoin = useCallback(async () => {
+    if (!peerManagerRef.current) return
+    setCallStatus('reconnecting')
+
+    reconnectTimersRef.current.forEach((t) => clearTimeout(t))
+    reconnectTimersRef.current.clear()
+    peerManagerRef.current.destroyAll()
+    joinedAtRef.current.clear()
+    creatingRef.current.clear()
+    pendingStreamsRef.current.clear()
+    clearRemote()
+
+    await signalingRef.current?.leave()
+    signalingRef.current = null
+    await join()
+  }, [join, clearRemote])
+
+  useEffect(() => {
+    function onOnline() {
+      // Only act if we were actually in a call.
+      if (!signalingRef.current) return
+      rtcLog('Call', 'network back online — rejoining room')
+      void rejoin()
+    }
+    window.addEventListener('online', onOnline)
+    return () => window.removeEventListener('online', onOnline)
+  }, [rejoin])
+
+  // Keep the local participant's media flags + preview stream in sync.
+  useEffect(() => {
+    const previewStream =
+      media.mediaState.screenSharing && media.mediaState.displayStream
+        ? media.mediaState.displayStream
+        : media.mediaState.localStream
+    patch(self.peerId, {
+      audioEnabled: media.mediaState.audioEnabled,
+      videoEnabled: media.mediaState.videoEnabled,
+      stream: previewStream,
+    })
+  }, [
+    media.mediaState.audioEnabled,
+    media.mediaState.videoEnabled,
+    media.mediaState.screenSharing,
+    media.mediaState.displayStream,
+    media.mediaState.localStream,
+    patch,
+    self.peerId,
+  ])
+
+  const stopScreenShareInternal = useCallback(async () => {
+    const cameraTrack = media.managerRef.current?.getCameraVideoTrack() ?? null
+    await peerManagerRef.current?.replaceVideoTrack(cameraTrack)
+    media.stopScreenShare()
+  }, [media])
+
+  const startScreenShare = useCallback(async () => {
+    try {
+      const track = await media.startScreenShare()
+      await peerManagerRef.current?.replaceVideoTrack(track)
+      // Browser "Stop sharing" button ends the track → revert.
+      track.addEventListener('ended', () => void stopScreenShareInternal())
+    } catch (err) {
+      rtcError('Call', 'screen share failed', err)
+    }
+  }, [media, stopScreenShareInternal])
+
+  const toggleNoiseSuppression = useCallback(async () => {
+    const newTrack = await media.toggleNoiseSuppression()
+    // Swap the cleaned/raw audio track on every peer connection.
+    if (newTrack) await peerManagerRef.current?.replaceAudioTrack(newTrack)
+  }, [media])
+
+  const leaveCall = useCallback(async () => {
+    reconnectTimersRef.current.forEach((t) => clearTimeout(t))
+    reconnectTimersRef.current.clear()
+    peerManagerRef.current?.destroyAll()
+    peerManagerRef.current = null
+    await signalingRef.current?.leave()
+    signalingRef.current = null
+    media.stopAll()
+    reset()
+    router.push('/')
+  }, [media, reset, router])
+
+  return {
+    participants,
+    localStream: media.mediaState.localStream,
+    mediaState: media.mediaState,
+    callStatus,
+    selfPeerId: self.peerId,
+    inLobby: callStatus === 'idle',
+    roomFull,
+    join,
+    toggleAudio: media.toggleAudio,
+    toggleVideo: media.toggleVideo,
+    toggleNoiseSuppression,
+    startScreenShare,
+    stopScreenShare: stopScreenShareInternal,
+    leaveCall,
+  }
+}
