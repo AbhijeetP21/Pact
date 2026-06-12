@@ -5,7 +5,12 @@ import type {
 
 import { createClient } from '@/lib/supabase/client'
 import { rtcError, rtcLog } from '@/lib/webrtc/log'
-import type { PresencePayload, SignalMessage } from '@/types'
+import type {
+  ChatMessage,
+  MediaFlagsPayload,
+  PresencePayload,
+  SignalMessage,
+} from '@/types'
 
 type Callbacks = {
   /** Full roster of peers already present (excludes self). Fires on every sync. */
@@ -16,6 +21,10 @@ type Callbacks = {
   onParticipantLeft: (peerId: string) => void
   /** A signaling payload (SDP/ICE) addressed to us arrived from `fromPeerId`. */
   onSignalReceived: (fromPeerId: string, data: object) => void
+  /** A session chat message arrived from another participant. */
+  onChatMessage: (message: ChatMessage) => void
+  /** A peer announced its mic/camera on-off state. */
+  onMediaFlags: (payload: MediaFlagsPayload) => void
 }
 
 /**
@@ -90,6 +99,20 @@ export class SignalingService {
           this.callbacks.onSignalReceived(payload.from, payload.data)
         },
       )
+      .on(
+        'broadcast',
+        { event: 'chat' },
+        ({ payload }: { payload: ChatMessage }) => {
+          this.callbacks.onChatMessage(payload)
+        },
+      )
+      .on(
+        'broadcast',
+        { event: 'media-flags' },
+        ({ payload }: { payload: MediaFlagsPayload }) => {
+          this.callbacks.onMediaFlags(payload)
+        },
+      )
 
     await new Promise<void>((resolve, reject) => {
       // Once we've successfully subscribed, later status changes (notably
@@ -130,6 +153,26 @@ export class SignalingService {
         to,
         data,
       } satisfies SignalMessage,
+    })
+  }
+
+  /** Broadcast an ephemeral chat message to everyone in the room. */
+  async sendChat(message: ChatMessage): Promise<void> {
+    if (!this.channel) return
+    await this.channel.send({
+      type: 'broadcast',
+      event: 'chat',
+      payload: message,
+    })
+  }
+
+  /** Announce our mic/camera on-off state to everyone in the room. */
+  async sendMediaFlags(payload: MediaFlagsPayload): Promise<void> {
+    if (!this.channel) return
+    await this.channel.send({
+      type: 'broadcast',
+      event: 'media-flags',
+      payload,
     })
   }
 

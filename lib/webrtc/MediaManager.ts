@@ -1,4 +1,8 @@
 import {
+  BackgroundProcessor,
+  tryCreateBlur,
+} from '@/lib/webrtc/BackgroundProcessor'
+import {
   NoiseSuppressor,
   tryCreateSuppressor,
 } from '@/lib/webrtc/NoiseSuppressor'
@@ -38,7 +42,10 @@ export class MediaManager {
   private displayStream: MediaStream | null = null
   private suppressor: NoiseSuppressor | null = null
   private cleanedTrack: MediaStreamTrack | null = null
+  private blurProcessor: BackgroundProcessor | null = null
+  private blurredTrack: MediaStreamTrack | null = null
   private audioEnabled = true
+  private videoEnabled = true
 
   /**
    * Acquire camera/mic, optionally routing the mic through RNNoise, and return
@@ -95,8 +102,9 @@ export class MediaManager {
     return this.localStream
   }
 
+  /** The active camera-side video track (blurred when enabled, else raw). */
   getCameraVideoTrack(): MediaStreamTrack | null {
-    return this.rawStream?.getVideoTracks()[0] ?? null
+    return this.blurredTrack ?? this.rawStream?.getVideoTracks()[0] ?? null
   }
 
   getActiveAudioTrack(): MediaStreamTrack | null {
@@ -114,6 +122,7 @@ export class MediaManager {
   /** Enable/disable a track kind in place. Returns the resulting enabled state. */
   setTrackEnabled(kind: 'audio' | 'video', enabled: boolean): boolean {
     if (kind === 'audio') this.audioEnabled = enabled
+    else this.videoEnabled = enabled
     const tracks =
       kind === 'audio'
         ? this.localStream?.getAudioTracks()
@@ -163,6 +172,43 @@ export class MediaManager {
     return nextTrack
   }
 
+  /**
+   * Toggle background blur on/off, swapping the outbound video track. Returns
+   * the new active video track (so the caller can replaceTrack on its peers),
+   * or null if there's no camera.
+   */
+  async setBackgroundBlur(enabled: boolean): Promise<MediaStreamTrack | null> {
+    const rawVideo = this.rawStream?.getVideoTracks()[0] ?? null
+    if (!rawVideo) return null
+
+    let nextTrack: MediaStreamTrack | null
+    if (enabled) {
+      if (!this.blurredTrack) {
+        const result = await tryCreateBlur(new MediaStream([rawVideo]))
+        if (result) {
+          this.blurProcessor = result.processor
+          this.blurredTrack = result.track
+        }
+      }
+      nextTrack = this.blurredTrack ?? rawVideo
+    } else {
+      this.blurProcessor?.stop()
+      this.blurProcessor = null
+      this.blurredTrack = null
+      nextTrack = rawVideo
+    }
+
+    if (!this.localStream) return nextTrack
+
+    for (const t of this.localStream.getVideoTracks()) {
+      this.localStream.removeTrack(t)
+    }
+    nextTrack.enabled = this.videoEnabled
+    this.localStream.addTrack(nextTrack)
+    rtcLog('Media', `background blur ${enabled ? 'on' : 'off'}`)
+    return nextTrack
+  }
+
   /** Acquire a screen-share display stream. */
   async getDisplayStream(): Promise<MediaStream> {
     const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -193,6 +239,9 @@ export class MediaManager {
     this.suppressor = null
     this.cleanedTrack?.stop()
     this.cleanedTrack = null
+    this.blurProcessor?.stop()
+    this.blurProcessor = null
+    this.blurredTrack = null
     this.rawStream?.getTracks().forEach((t) => t.stop())
     this.localStream?.getTracks().forEach((t) => t.stop())
     this.stopDisplayStream()

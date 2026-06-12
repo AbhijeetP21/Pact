@@ -1,7 +1,9 @@
 'use client'
 
 import {
+  Aperture,
   AudioLines,
+  MessageSquare,
   Mic,
   MicOff,
   MonitorUp,
@@ -16,21 +18,29 @@ import type { MediaState } from '@/types'
 export type ControlBarProps = {
   mediaState: MediaState
   localSpeaking: boolean
+  chatOpen: boolean
+  chatUnread: number
   onToggleAudio: () => void
   onToggleVideo: () => void
   onToggleScreenShare: () => void
   onToggleNoiseSuppression: () => void
+  onToggleBackgroundBlur: () => void
+  onToggleChat: () => void
   onLeave: () => void
 }
 
-/** Fixed, pill-shaped call controls: mic, camera, screen share, leave. */
+/** Fixed, pill-shaped call controls: mic, camera, screen share, chat, leave. */
 export function ControlBar({
   mediaState,
   localSpeaking,
+  chatOpen,
+  chatUnread,
   onToggleAudio,
   onToggleVideo,
   onToggleScreenShare,
   onToggleNoiseSuppression,
+  onToggleBackgroundBlur,
+  onToggleChat,
   onLeave,
 }: ControlBarProps) {
   return (
@@ -75,12 +85,35 @@ export function ControlBar({
         </ControlButton>
 
         <ControlButton
+          active={mediaState.backgroundBlur}
+          highlight
+          onClick={onToggleBackgroundBlur}
+          label={
+            mediaState.backgroundBlur
+              ? 'Background blur on'
+              : 'Background blur off'
+          }
+        >
+          <Aperture className="size-5" />
+        </ControlButton>
+
+        <ControlButton
           active={mediaState.screenSharing}
           highlight
           onClick={onToggleScreenShare}
           label={mediaState.screenSharing ? 'Stop sharing screen' : 'Share screen'}
         >
           <MonitorUp className="size-5" />
+        </ControlButton>
+
+        <ControlButton
+          active={chatOpen}
+          highlight
+          onClick={onToggleChat}
+          label={chatOpen ? 'Close chat' : 'Open chat'}
+          badge={chatUnread}
+        >
+          <MessageSquare className="size-5" />
         </ControlButton>
 
         <div className="mx-1 h-6 w-px bg-white/10" />
@@ -101,6 +134,7 @@ function ControlButton({
   destructive,
   highlight,
   speaking,
+  badge,
 }: {
   children: React.ReactNode
   onClick: () => void
@@ -109,6 +143,7 @@ function ControlButton({
   destructive?: boolean
   highlight?: boolean
   speaking?: boolean
+  badge?: number
 }) {
   return (
     <button
@@ -129,6 +164,11 @@ function ControlButton({
         <span className="absolute inset-0 animate-ping rounded-full bg-primary/40" />
       )}
       <span className="relative">{children}</span>
+      {badge && badge > 0 ? (
+        <span className="absolute -right-0.5 -top-0.5 flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-4 text-primary-foreground">
+          {badge > 9 ? '9+' : badge}
+        </span>
+      ) : null}
     </button>
   )
 }

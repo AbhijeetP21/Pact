@@ -30,6 +30,20 @@ export type SignalMessage = {
   data: object // simple-peer signal payload (SDP or ICE candidate)
 }
 
+export type ChatMessage = {
+  id: string
+  from: string // sender peerId
+  displayName: string
+  text: string
+  at: number // epoch ms — when it was sent
+}
+
+export type MediaFlagsPayload = {
+  peerId: string
+  audioEnabled: boolean
+  videoEnabled: boolean
+}
+
 export type PresencePayload = {
   peerId: string
   userId: string
@@ -43,6 +57,7 @@ export type MediaState = {
   videoEnabled: boolean
   screenSharing: boolean
   noiseSuppression: boolean
+  backgroundBlur: boolean
   localStream: MediaStream | null
   displayStream: MediaStream | null
 }

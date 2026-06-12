@@ -9,7 +9,11 @@ const INITIAL_STATE: MediaState = {
   audioEnabled: true,
   videoEnabled: true,
   screenSharing: false,
-  noiseSuppression: true,
+  // RNNoise is CPU-intensive and can cause robotic/dropout artifacts for the
+  // listener on slower machines, so it's opt-in. The browser's native noise
+  // suppression (always on via getUserMedia) handles most cases cleanly.
+  noiseSuppression: false,
+  backgroundBlur: false,
   localStream: null,
   displayStream: null,
 }
@@ -27,7 +31,8 @@ export function useMedia() {
   const manager = managerRef.current
 
   const [mediaState, setMediaState] = useState<MediaState>(INITIAL_STATE)
-  const noiseRef = useRef(true)
+  const noiseRef = useRef(false)
+  const blurRef = useRef(false)
 
   const acquireLocalStream = useCallback(async () => {
     const stream = await manager.acquireLocalStream(noiseRef.current)
@@ -49,6 +54,18 @@ export function useMedia() {
     noiseRef.current = next
     const track = await manager.setNoiseSuppression(next)
     setMediaState((prev) => ({ ...prev, noiseSuppression: next }))
+    return track
+  }, [manager])
+
+  /**
+   * Toggle background blur. Returns the new active video track so the caller
+   * can swap it on its peer connections.
+   */
+  const toggleBackgroundBlur = useCallback(async () => {
+    const next = !blurRef.current
+    blurRef.current = next
+    const track = await manager.setBackgroundBlur(next)
+    setMediaState((prev) => ({ ...prev, backgroundBlur: next }))
     return track
   }, [manager])
 
@@ -100,6 +117,7 @@ export function useMedia() {
     toggleAudio,
     toggleVideo,
     toggleNoiseSuppression,
+    toggleBackgroundBlur,
     startScreenShare,
     stopScreenShare,
     stopAll,

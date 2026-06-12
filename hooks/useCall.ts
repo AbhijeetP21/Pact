@@ -11,6 +11,7 @@ import { useParticipants } from '@/hooks/useParticipants'
 import { rtcError, rtcLog } from '@/lib/webrtc/log'
 import type {
   CallStatus,
+  ChatMessage,
   MediaState,
   Participant,
   PresencePayload,
@@ -43,10 +44,14 @@ export type UseCallReturn = {
   inLobby: boolean
   /** Room is at capacity — joining is blocked. */
   roomFull: boolean
+  /** Ephemeral session chat (not persisted; cleared on leave). */
+  chatMessages: ChatMessage[]
+  sendChat: (text: string) => void
   join: () => Promise<void>
   toggleAudio: () => void
   toggleVideo: () => void
   toggleNoiseSuppression: () => Promise<void>
+  toggleBackgroundBlur: () => Promise<void>
   startScreenShare: () => Promise<void>
   stopScreenShare: () => void
   leaveCall: () => Promise<void>
@@ -86,6 +91,7 @@ export function useCall({
   // then 'connecting' → 'connected' after the user joins.
   const [callStatus, setCallStatus] = useState<CallStatus>('acquiring-media')
   const [roomFull, setRoomFull] = useState(false)
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
 
   // Stable identity for this session.
   const [self] = useState<PresencePayload>(() => ({
@@ -106,6 +112,13 @@ export function useCall({
     new Map(),
   )
   const cancelledRef = useRef(false)
+  // Latest local mic/camera state, mirrored for broadcasting to peers.
+  const mediaFlagsRef = useRef({ audioEnabled: true, videoEnabled: true })
+  // Last-known remote mic/camera state, kept so flags that arrive before a
+  // peer's presence entry registers can be applied once it's admitted.
+  const remoteFlagsRef = useRef<
+    Map<string, { audioEnabled: boolean; videoEnabled: boolean }>
+  >(new Map())
 
   // Later joiner initiates: I initiate toward a peer iff my joinedAt is later
   // (ties broken by peerId) — exactly one side of each pair initiates.
@@ -180,6 +193,9 @@ export function useCall({
     (payload: PresencePayload) => {
       upsertFromPresence(payload)
       joinedAtRef.current.set(payload.peerId, payload.joinedAt)
+      // Apply any mic/camera state that arrived before this peer was admitted.
+      const flags = remoteFlagsRef.current.get(payload.peerId)
+      if (flags) patch(payload.peerId, flags)
       flushPendingStream(payload.peerId)
       // A peer can connect *before* its presence entry registers (its offer
       // arrives via broadcast first). Connection-state updates fired before the
@@ -188,7 +204,13 @@ export function useCall({
       if (pc) setConnectionState(payload.peerId, pc.connectionState)
       void ensurePeer(payload.peerId, payload.joinedAt)
     },
-    [upsertFromPresence, flushPendingStream, setConnectionState, ensurePeer],
+    [
+      upsertFromPresence,
+      flushPendingStream,
+      setConnectionState,
+      ensurePeer,
+      patch,
+    ],
   )
 
   const buildPeerManager = useCallback(
@@ -266,22 +288,38 @@ export function useCall({
       joinedAtRef.current.clear()
       creatingRef.current.clear()
       pendingStreamsRef.current.clear()
+      remoteFlagsRef.current.clear()
       reset()
+      setChatMessages([])
       setCallStatus('acquiring-media')
     }
     // Run once per room mount; all dependencies are stable refs/callbacks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug])
 
+  // Announce our current mic/camera state to peers. No-op until we've joined.
+  const broadcastMediaFlags = useCallback(() => {
+    void signalingRef.current?.sendMediaFlags({
+      peerId: self.peerId,
+      audioEnabled: mediaFlagsRef.current.audioEnabled,
+      videoEnabled: mediaFlagsRef.current.videoEnabled,
+    })
+  }, [self.peerId])
+
   const buildSignaling = useCallback(() => {
     return new SignalingService(self.peerId, {
       onPresenceSync: (existing) => existing.forEach(admitMember),
-      onParticipantJoined: (participant) => admitMember(participant),
+      onParticipantJoined: (participant) => {
+        admitMember(participant)
+        // A newcomer doesn't know our current mic/camera state — tell them.
+        broadcastMediaFlags()
+      },
       onParticipantLeft: (peerId) => {
         clearReconnect(peerId)
         peerManagerRef.current?.removePeer(peerId)
         joinedAtRef.current.delete(peerId)
         pendingStreamsRef.current.delete(peerId)
+        remoteFlagsRef.current.delete(peerId)
         remove(peerId)
       },
       onSignalReceived: async (fromPeerId, data) => {
@@ -291,8 +329,40 @@ export function useCall({
         await ensurePeer(fromPeerId, joinedAtRef.current.get(fromPeerId))
         peerManagerRef.current?.signal(fromPeerId, data)
       },
+      onChatMessage: (message) =>
+        setChatMessages((prev) => [...prev, message]),
+      onMediaFlags: ({ peerId, audioEnabled, videoEnabled }) => {
+        remoteFlagsRef.current.set(peerId, { audioEnabled, videoEnabled })
+        patch(peerId, { audioEnabled, videoEnabled })
+      },
     })
-  }, [self, admitMember, ensurePeer, remove, clearReconnect])
+  }, [
+    self,
+    admitMember,
+    ensurePeer,
+    remove,
+    clearReconnect,
+    patch,
+    broadcastMediaFlags,
+  ])
+
+  const sendChat = useCallback(
+    (text: string) => {
+      const trimmed = text.trim()
+      if (!trimmed || !signalingRef.current) return
+      const message: ChatMessage = {
+        id: nanoid(8),
+        from: self.peerId,
+        displayName: self.displayName,
+        text: trimmed.slice(0, 2000),
+        at: Date.now(),
+      }
+      // broadcast { self: false } means we won't receive our own — append now.
+      setChatMessages((prev) => [...prev, message])
+      void signalingRef.current.sendChat(message)
+    },
+    [self],
+  )
 
   // ---- Phase 2: join the room signaling channel (called from the lobby) ----
   const join = useCallback(async () => {
@@ -325,8 +395,10 @@ export function useCall({
 
     signalingRef.current = signaling
     setCallStatus('connected')
+    // Announce our current mic/camera state to peers already in the room.
+    broadcastMediaFlags()
     rtcLog('Call', `joined room ${slug} as ${self.peerId}`)
-  }, [slug, self, maxParticipants, buildSignaling])
+  }, [slug, self, maxParticipants, buildSignaling, broadcastMediaFlags])
 
   // ---- Network resilience: rejoin on reconnect ----
   const rejoin = useCallback(async () => {
@@ -339,6 +411,7 @@ export function useCall({
     joinedAtRef.current.clear()
     creatingRef.current.clear()
     pendingStreamsRef.current.clear()
+    remoteFlagsRef.current.clear()
     clearRemote()
 
     await signalingRef.current?.leave()
@@ -368,6 +441,12 @@ export function useCall({
       videoEnabled: media.mediaState.videoEnabled,
       stream: previewStream,
     })
+    // Mirror + announce our mic/camera state so peers' tiles reflect it.
+    mediaFlagsRef.current = {
+      audioEnabled: media.mediaState.audioEnabled,
+      videoEnabled: media.mediaState.videoEnabled,
+    }
+    broadcastMediaFlags()
   }, [
     media.mediaState.audioEnabled,
     media.mediaState.videoEnabled,
@@ -376,6 +455,7 @@ export function useCall({
     media.mediaState.localStream,
     patch,
     self.peerId,
+    broadcastMediaFlags,
   ])
 
   const stopScreenShareInternal = useCallback(async () => {
@@ -401,6 +481,15 @@ export function useCall({
     if (newTrack) await peerManagerRef.current?.replaceAudioTrack(newTrack)
   }, [media])
 
+  const toggleBackgroundBlur = useCallback(async () => {
+    const newTrack = await media.toggleBackgroundBlur()
+    // Only swap on peers when we're actually sending the camera (a screen
+    // share owns the video sender until it stops, then reverts to this track).
+    if (newTrack && !media.mediaState.screenSharing) {
+      await peerManagerRef.current?.replaceVideoTrack(newTrack)
+    }
+  }, [media])
+
   const leaveCall = useCallback(async () => {
     reconnectTimersRef.current.forEach((t) => clearTimeout(t))
     reconnectTimersRef.current.clear()
@@ -421,10 +510,13 @@ export function useCall({
     selfPeerId: self.peerId,
     inLobby: callStatus === 'idle',
     roomFull,
+    chatMessages,
+    sendChat,
     join,
     toggleAudio: media.toggleAudio,
     toggleVideo: media.toggleVideo,
     toggleNoiseSuppression,
+    toggleBackgroundBlur,
     startScreenShare,
     stopScreenShare: stopScreenShareInternal,
     leaveCall,

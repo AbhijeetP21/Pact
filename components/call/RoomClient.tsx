@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
+  Aperture,
   ArrowRight,
   AudioLines,
   Loader2,
@@ -17,6 +18,7 @@ import { useAudioLevel } from '@/hooks/useAudioLevel'
 import { cn, isWebRTCSupported } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { ChatPanel } from '@/components/call/ChatPanel'
 import { ControlBar } from '@/components/call/ControlBar'
 import { LocalPreview } from '@/components/call/LocalPreview'
 import { ParticipantGrid } from '@/components/call/ParticipantGrid'
@@ -74,10 +76,13 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
     inLobby,
     roomFull,
     selfPeerId,
+    chatMessages,
+    sendChat,
     join,
     toggleAudio,
     toggleVideo,
     toggleNoiseSuppression,
+    toggleBackgroundBlur,
     startScreenShare,
     stopScreenShare,
     leaveCall,
@@ -93,6 +98,14 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
   const rootRef = useRef<HTMLDivElement>(null)
   const [focusedPeerId, setFocusedPeerId] = useState<string | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
+
+  // Session chat: track unread while the panel is closed.
+  const [chatOpen, setChatOpen] = useState(false)
+  const [seenCount, setSeenCount] = useState(0)
+  useEffect(() => {
+    if (chatOpen) setSeenCount(chatMessages.length)
+  }, [chatOpen, chatMessages.length])
+  const chatUnread = chatOpen ? 0 : Math.max(0, chatMessages.length - seenCount)
 
   // Auto-spotlight our own screen share while it's active.
   useEffect(() => {
@@ -186,35 +199,21 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
             </div>
           ) : (
             <>
-              <div className="flex items-center justify-between rounded-lg border bg-card px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <AudioLines className="size-4 text-primary" />
-                  <div className="text-sm">
-                    <p className="font-medium">Noise cancellation</p>
-                    <p className="text-xs text-muted-foreground">
-                      Removes background noise on-device.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={mediaState.noiseSuppression}
-                  onClick={() => void toggleNoiseSuppression()}
-                  className={cn(
-                    'relative h-6 w-11 shrink-0 rounded-full transition-colors',
-                    mediaState.noiseSuppression ? 'bg-primary' : 'bg-muted',
-                  )}
-                >
-                  <span
-                    className={cn(
-                      'absolute top-0.5 size-5 rounded-full bg-white transition-transform',
-                      mediaState.noiseSuppression
-                        ? 'translate-x-[1.375rem]'
-                        : 'translate-x-0.5',
-                    )}
-                  />
-                </button>
+              <div className="space-y-2">
+                <LobbyToggle
+                  icon={<AudioLines className="size-4 text-primary" />}
+                  title="Noise cancellation"
+                  description="Removes steady background noise on-device. Best left off on a fast connection."
+                  checked={mediaState.noiseSuppression}
+                  onToggle={() => void toggleNoiseSuppression()}
+                />
+                <LobbyToggle
+                  icon={<Aperture className="size-4 text-primary" />}
+                  title="Blur my background"
+                  description="Hides your surroundings on-device."
+                  checked={mediaState.backgroundBlur}
+                  onToggle={() => void toggleBackgroundBlur()}
+                />
               </div>
 
               <Button
@@ -300,6 +299,8 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
       <ControlBar
         mediaState={mediaState}
         localSpeaking={localSpeaking}
+        chatOpen={chatOpen}
+        chatUnread={chatUnread}
         onToggleAudio={toggleAudio}
         onToggleVideo={toggleVideo}
         onToggleScreenShare={() => {
@@ -307,8 +308,62 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
           else void startScreenShare()
         }}
         onToggleNoiseSuppression={() => void toggleNoiseSuppression()}
+        onToggleBackgroundBlur={() => void toggleBackgroundBlur()}
+        onToggleChat={() => setChatOpen((o) => !o)}
         onLeave={() => void leaveCall()}
       />
+
+      <ChatPanel
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        messages={chatMessages}
+        selfPeerId={selfPeerId}
+        onSend={sendChat}
+      />
+    </div>
+  )
+}
+
+function LobbyToggle({
+  icon,
+  title,
+  description,
+  checked,
+  onToggle,
+}: {
+  icon: React.ReactNode
+  title: string
+  description: string
+  checked: boolean
+  onToggle: () => void
+}) {
+  return (
+    <div className="flex items-center justify-between rounded-lg border bg-card px-4 py-3">
+      <div className="flex items-center gap-2">
+        {icon}
+        <div className="text-sm">
+          <p className="font-medium">{title}</p>
+          <p className="text-xs text-muted-foreground">{description}</p>
+        </div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={title}
+        onClick={onToggle}
+        className={cn(
+          'relative h-6 w-11 shrink-0 rounded-full transition-colors',
+          checked ? 'bg-primary' : 'bg-muted',
+        )}
+      >
+        <span
+          className={cn(
+            'absolute top-0.5 size-5 rounded-full bg-white transition-transform',
+            checked ? 'translate-x-[1.375rem]' : 'translate-x-0.5',
+          )}
+        />
+      </button>
     </div>
   )
 }
