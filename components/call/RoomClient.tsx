@@ -320,26 +320,26 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
         </div>
       </header>
 
-      <main className="flex flex-1 items-start justify-center overflow-y-auto px-4 pb-28 sm:items-center">
-        {isSpotlight && focusedPeerId ? (
-          <SpotlightView
-            participants={participants}
-            focusedPeerId={focusedPeerId}
-            mirrorLocal={mirrorLocal}
-            localSpeaking={localSpeaking}
-            onFocus={setFocusedPeerId}
-            onExit={() => setFocusedPeerId(null)}
-          />
-        ) : (
-          <div className="flex w-full items-center justify-center">
+      <main className="flex flex-1 flex-col overflow-y-auto px-4 pb-28">
+        <div className="flex min-h-0 w-full flex-1 items-center justify-center">
+          {isSpotlight && focusedPeerId ? (
+            <SpotlightView
+              participants={participants}
+              focusedPeerId={focusedPeerId}
+              mirrorLocal={mirrorLocal}
+              localSpeaking={localSpeaking}
+              onFocus={setFocusedPeerId}
+              onExit={() => setFocusedPeerId(null)}
+            />
+          ) : (
             <ParticipantGrid
               participants={participants}
               mirrorLocal={mirrorLocal}
               localSpeaking={localSpeaking}
               onFocus={setFocusedPeerId}
             />
-          </div>
-        )}
+          )}
+        </div>
       </main>
 
       <ControlBar
