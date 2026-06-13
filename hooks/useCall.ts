@@ -9,9 +9,11 @@ import { SignalingService } from '@/lib/webrtc/SignalingService'
 import { useMedia } from '@/hooks/useMedia'
 import { useParticipants } from '@/hooks/useParticipants'
 import { MAX_DISPLAY_NAME_LENGTH } from '@/lib/utils'
+import { sanitizeChatImage } from '@/lib/chat/image'
 import { rtcError, rtcLog } from '@/lib/webrtc/log'
 import type {
   CallStatus,
+  ChatImage,
   ChatMessage,
   MediaState,
   Participant,
@@ -58,7 +60,7 @@ export type UseCallReturn = {
   roomFull: boolean
   /** Ephemeral session chat (not persisted; cleared on leave). */
   chatMessages: ChatMessage[]
-  sendChat: (text: string) => void
+  sendChat: (text: string, image?: ChatImage) => void
   join: () => Promise<void>
   toggleAudio: () => void
   toggleVideo: () => void
@@ -377,6 +379,7 @@ export function useCall({
               0,
               MAX_DISPLAY_NAME_LENGTH,
             ),
+            image: sanitizeChatImage(message.image),
           }),
         ),
       onMediaFlags: ({ peerId, audioEnabled, videoEnabled }) => {
@@ -395,14 +398,16 @@ export function useCall({
   ])
 
   const sendChat = useCallback(
-    (text: string) => {
+    (text: string, image?: ChatImage) => {
       const trimmed = text.trim()
-      if (!trimmed || !signalingRef.current) return
+      // Allow an image-only message (no text), but require at least one.
+      if ((!trimmed && !image) || !signalingRef.current) return
       const message: ChatMessage = {
         id: nanoid(8),
         from: self.peerId,
         displayName: self.displayName,
         text: trimmed.slice(0, MAX_CHAT_LENGTH),
+        ...(image ? { image } : {}),
         at: Date.now(),
       }
       // broadcast { self: false } means we won't receive our own — append now.
