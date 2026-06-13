@@ -16,6 +16,7 @@ const INITIAL_STATE: MediaState = {
   backgroundBlur: false,
   hasCamera: true,
   hasMic: true,
+  hasMultipleCameras: false,
   facingMode: 'user',
   localStream: null,
   displayStream: null,
@@ -39,6 +40,10 @@ export function useMedia() {
 
   const acquireLocalStream = useCallback(async () => {
     const stream = await manager.acquireLocalStream(noiseRef.current)
+    // Camera count is only reliable once permission has been granted.
+    const hasMultipleCameras = manager.hasVideo()
+      ? await manager.hasMultipleCameras()
+      : false
     setMediaState((prev) => ({
       ...prev,
       localStream: stream,
@@ -46,6 +51,7 @@ export function useMedia() {
       videoEnabled: manager.hasVideo(),
       hasCamera: manager.hasVideo(),
       hasMic: manager.hasAudio(),
+      hasMultipleCameras,
       facingMode: manager.getFacingMode(),
     }))
     return stream

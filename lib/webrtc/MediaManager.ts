@@ -295,7 +295,12 @@ export class MediaManager {
 
     const newTrack = stream.getVideoTracks()[0] ?? null
     if (!newTrack) return null
-    this.facingMode = next
+    // Trust the camera we actually got, not the one we asked for. On a
+    // single-camera device the `exact` request fails and the `ideal` fallback
+    // hands back the same (front) camera — so report its true facing to keep
+    // the local tile's mirror correct.
+    const actual = newTrack.getSettings().facingMode
+    this.facingMode = actual === 'user' || actual === 'environment' ? actual : next
     newTrack.enabled = this.videoEnabled
 
     // Replace the raw camera track (stop the old one to release the device).
@@ -318,6 +323,20 @@ export class MediaManager {
 
   enumerateDevices(): Promise<MediaDeviceInfo[]> {
     return navigator.mediaDevices.enumerateDevices()
+  }
+
+  /**
+   * Whether the device exposes 2+ cameras (i.e. a flip is meaningful). Call
+   * after acquiring the stream — the count is only reliable once camera
+   * permission has been granted. Returns false if enumeration fails.
+   */
+  async hasMultipleCameras(): Promise<boolean> {
+    try {
+      const devices = await this.enumerateDevices()
+      return devices.filter((d) => d.kind === 'videoinput').length > 1
+    } catch {
+      return false
+    }
   }
 
   /** Stop all tracks and release every resource. */

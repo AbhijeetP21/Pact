@@ -89,7 +89,7 @@ export function ControlBar({
           )}
         </ControlButton>
 
-        {isMobile && mediaState.hasCamera && (
+        {isMobile && mediaState.hasCamera && mediaState.hasMultipleCameras && (
           <ControlButton onClick={onFlipCamera} label="Flip camera">
             <SwitchCamera className="size-5" />
           </ControlButton>

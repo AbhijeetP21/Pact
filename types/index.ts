@@ -61,6 +61,8 @@ export type MediaState = {
   /** Whether a camera/mic device is actually present (drives disabled toggles). */
   hasCamera: boolean
   hasMic: boolean
+  /** 2+ cameras present — gates the flip-camera button (like FaceTime/Meet). */
+  hasMultipleCameras: boolean
   /** Active camera; the rear camera is shown un-mirrored, like the front isn't. */
   facingMode: 'user' | 'environment'
   localStream: MediaStream | null
