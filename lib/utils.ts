@@ -32,6 +32,17 @@ export function getRoomUrl(slug: string): string {
   return `${APP_URL.replace(/\/$/, '')}/room/${slug}`
 }
 
+/**
+ * Heuristic for phone/small-tablet devices: a coarse (touch) pointer on a
+ * narrow viewport. Used to pick lighter capture settings and trim CPU-heavy
+ * features (blur, noise suppression) that would overheat a phone in a mesh
+ * call. Always false during SSR.
+ */
+export function isLikelyMobile(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false
+  return window.matchMedia('(pointer: coarse) and (max-width: 1024px)').matches
+}
+
 /** Whether the browser supports the WebRTC + getUserMedia APIs Pact needs. */
 export function isWebRTCSupported(): boolean {
   return (

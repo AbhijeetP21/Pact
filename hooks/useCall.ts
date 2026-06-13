@@ -28,6 +28,10 @@ const FALLBACK_ICE: RTCIceServer[] = [
 // Delay before recreating a peer whose ICE connection failed.
 const RECONNECT_DELAY_MS = 2000
 
+// Cap reconnect attempts so a peer that failed but never fired a presence
+// 'leave' (crashed tab / network partition) doesn't loop forever every 2s.
+const MAX_RECONNECT_ATTEMPTS = 5
+
 export type UseCallParams = {
   slug: string
   maxParticipants: number
@@ -50,6 +54,7 @@ export type UseCallReturn = {
   join: () => Promise<void>
   toggleAudio: () => void
   toggleVideo: () => void
+  switchCamera: () => Promise<void>
   toggleNoiseSuppression: () => Promise<void>
   toggleBackgroundBlur: () => Promise<void>
   startScreenShare: () => Promise<void>
@@ -111,6 +116,7 @@ export function useCall({
   const reconnectTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   )
+  const reconnectAttemptsRef = useRef<Map<string, number>>(new Map())
   const cancelledRef = useRef(false)
   // Latest local mic/camera state, mirrored for broadcasting to peers.
   const mediaFlagsRef = useRef({ audioEnabled: true, videoEnabled: true })
@@ -167,20 +173,34 @@ export function useCall({
       clearTimeout(timer)
       reconnectTimersRef.current.delete(peerId)
     }
+    // A peer that recovered gets its reconnect budget back.
+    reconnectAttemptsRef.current.delete(peerId)
   }, [])
 
   // On ICE failure, recreate the peer after a short delay (if it's still in the
   // room). Deterministic initiator roles mean the handshake re-establishes
-  // cleanly without glare.
+  // cleanly without glare. Capped so a vanished-without-leaving peer can't loop.
   const scheduleReconnect = useCallback(
     (peerId: string) => {
       if (reconnectTimersRef.current.has(peerId)) return
+      const attempts = reconnectAttemptsRef.current.get(peerId) ?? 0
+      if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+        rtcError(
+          'Call',
+          `giving up on peer ${peerId} after ${attempts} reconnect attempts`,
+        )
+        return
+      }
       const timer = setTimeout(() => {
         reconnectTimersRef.current.delete(peerId)
         const joinedAt = joinedAtRef.current.get(peerId)
         const pm = peerManagerRef.current
         if (cancelledRef.current || !joinedAt || !pm) return
-        rtcLog('Call', `reconnecting peer ${peerId} after ICE failure`)
+        reconnectAttemptsRef.current.set(peerId, attempts + 1)
+        rtcLog(
+          'Call',
+          `reconnecting peer ${peerId} after ICE failure (attempt ${attempts + 1})`,
+        )
         void pm.createPeer(peerId, isInitiator(joinedAt, peerId))
       }, RECONNECT_DELAY_MS)
       reconnectTimersRef.current.set(peerId, timer)
@@ -280,6 +300,7 @@ export function useCall({
       cancelledRef.current = true
       reconnectTimersRef.current.forEach((t) => clearTimeout(t))
       reconnectTimersRef.current.clear()
+      reconnectAttemptsRef.current.clear()
       peerManagerRef.current?.destroyAll()
       peerManagerRef.current = null
       void signalingRef.current?.leave()
@@ -369,17 +390,25 @@ export function useCall({
     if (signalingRef.current || !peerManagerRef.current) return
 
     const signaling = buildSignaling()
+    // Assign the ref *before* joining: presence sync fires during join() and
+    // triggers initiator-side offers whose 'signal' callback reads
+    // signalingRef.current. Assigning only after the await let a fast
+    // (module-cached) handshake emit an offer while the ref was still null,
+    // silently dropping it. Null it back out on every early-return path below.
+    signalingRef.current = signaling
 
     setCallStatus('connecting')
     try {
       await signaling.join(slug, self)
     } catch (err) {
+      signalingRef.current = null
       if (cancelledRef.current) return
       rtcError('Call', 'signaling join failed', err)
       setCallStatus('error')
       return
     }
     if (cancelledRef.current) {
+      signalingRef.current = null
       void signaling.leave()
       return
     }
@@ -387,13 +416,13 @@ export function useCall({
     // Join-time safeguard against the headcount race: if the room filled while
     // we were connecting, back out cleanly.
     if (signaling.currentRoster().length >= maxParticipants) {
+      signalingRef.current = null
       await signaling.leave()
       setRoomFull(true)
       setCallStatus('idle')
       return
     }
 
-    signalingRef.current = signaling
     setCallStatus('connected')
     // Announce our current mic/camera state to peers already in the room.
     broadcastMediaFlags()
@@ -407,6 +436,7 @@ export function useCall({
 
     reconnectTimersRef.current.forEach((t) => clearTimeout(t))
     reconnectTimersRef.current.clear()
+    reconnectAttemptsRef.current.clear()
     peerManagerRef.current.destroyAll()
     joinedAtRef.current.clear()
     creatingRef.current.clear()
@@ -475,6 +505,14 @@ export function useCall({
     }
   }, [media, stopScreenShareInternal])
 
+  const switchCamera = useCallback(async () => {
+    const newTrack = await media.switchCamera()
+    // Don't disturb the video sender while a screen share owns it.
+    if (newTrack && !media.mediaState.screenSharing) {
+      await peerManagerRef.current?.replaceVideoTrack(newTrack)
+    }
+  }, [media])
+
   const toggleNoiseSuppression = useCallback(async () => {
     const newTrack = await media.toggleNoiseSuppression()
     // Swap the cleaned/raw audio track on every peer connection.
@@ -493,6 +531,7 @@ export function useCall({
   const leaveCall = useCallback(async () => {
     reconnectTimersRef.current.forEach((t) => clearTimeout(t))
     reconnectTimersRef.current.clear()
+    reconnectAttemptsRef.current.clear()
     peerManagerRef.current?.destroyAll()
     peerManagerRef.current = null
     await signalingRef.current?.leave()
@@ -515,6 +554,7 @@ export function useCall({
     join,
     toggleAudio: media.toggleAudio,
     toggleVideo: media.toggleVideo,
+    switchCamera,
     toggleNoiseSuppression,
     toggleBackgroundBlur,
     startScreenShare,

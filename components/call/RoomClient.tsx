@@ -6,16 +6,21 @@ import {
   Aperture,
   ArrowRight,
   AudioLines,
+  Check,
+  Copy,
   Loader2,
   Maximize,
   Minimize,
   MonitorX,
   Users,
 } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { useCall } from '@/hooks/useCall'
 import { useAudioLevel } from '@/hooks/useAudioLevel'
-import { cn, isWebRTCSupported } from '@/lib/utils'
+import { useDeviceCapabilities } from '@/hooks/useDeviceCapabilities'
+import { useWakeLock } from '@/hooks/useWakeLock'
+import { cn, getRoomUrl, isWebRTCSupported } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { ChatPanel } from '@/components/call/ChatPanel'
@@ -81,12 +86,18 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
     join,
     toggleAudio,
     toggleVideo,
+    switchCamera,
     toggleNoiseSuppression,
     toggleBackgroundBlur,
     startScreenShare,
     stopScreenShare,
     leaveCall,
   } = useCall({ slug, maxParticipants, user })
+
+  const { isMobile, canScreenShare } = useDeviceCapabilities()
+
+  // Keep the screen awake while in an active call (esp. on phones).
+  useWakeLock(callStatus === 'connected' || callStatus === 'reconnecting')
 
   // Local speaking drives the local tile ring and the mic button pulse.
   const localSpeaking = useAudioLevel(
@@ -98,6 +109,18 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
   const rootRef = useRef<HTMLDivElement>(null)
   const [focusedPeerId, setFocusedPeerId] = useState<string | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [linkCopied, setLinkCopied] = useState(false)
+
+  async function copyInviteLink() {
+    try {
+      await navigator.clipboard.writeText(getRoomUrl(slug))
+      setLinkCopied(true)
+      toast.success('Room link copied')
+      setTimeout(() => setLinkCopied(false), 2000)
+    } catch {
+      toast.error('Could not copy the link')
+    }
+  }
 
   // Session chat: track unread while the panel is closed.
   const [chatOpen, setChatOpen] = useState(false)
@@ -137,6 +160,11 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
   const isSpotlight =
     focusedPeerId !== null &&
     participants.some((p) => p.peerId === focusedPeerId)
+
+  // Mirror the local tile only for the front camera with no screen share —
+  // a mirrored rear camera (or shared screen) reads as reversed/wrong.
+  const mirrorLocal =
+    !mediaState.screenSharing && mediaState.facingMode === 'user'
 
   if (callStatus === 'acquiring-media') {
     return (
@@ -199,22 +227,25 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
             </div>
           ) : (
             <>
-              <div className="space-y-2">
-                <LobbyToggle
-                  icon={<AudioLines className="size-4 text-primary" />}
-                  title="Noise cancellation"
-                  description="Removes steady background noise on-device. Best left off on a fast connection."
-                  checked={mediaState.noiseSuppression}
-                  onToggle={() => void toggleNoiseSuppression()}
-                />
-                <LobbyToggle
-                  icon={<Aperture className="size-4 text-primary" />}
-                  title="Blur my background"
-                  description="Hides your surroundings on-device."
-                  checked={mediaState.backgroundBlur}
-                  onToggle={() => void toggleBackgroundBlur()}
-                />
-              </div>
+              {/* Effects are CPU-heavy; hidden on mobile to protect battery. */}
+              {!isMobile && (
+                <div className="space-y-2">
+                  <LobbyToggle
+                    icon={<AudioLines className="size-4 text-primary" />}
+                    title="Noise cancellation"
+                    description="Removes steady background noise on-device. Best left off on a fast connection."
+                    checked={mediaState.noiseSuppression}
+                    onToggle={() => void toggleNoiseSuppression()}
+                  />
+                  <LobbyToggle
+                    icon={<Aperture className="size-4 text-primary" />}
+                    title="Blur my background"
+                    description="Hides your surroundings on-device."
+                    checked={mediaState.backgroundBlur}
+                    onToggle={() => void toggleBackgroundBlur()}
+                  />
+                </div>
+              )}
 
               <Button
                 size="lg"
@@ -260,26 +291,41 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
           </Badge>
           <button
             type="button"
-            onClick={toggleFullscreen}
-            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            onClick={() => void copyInviteLink()}
+            aria-label="Copy room link"
+            title="Copy room link to invite others"
             className="flex size-8 items-center justify-center rounded-md border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
-            {isFullscreen ? (
-              <Minimize className="size-4" />
+            {linkCopied ? (
+              <Check className="size-4 text-green-500" />
             ) : (
-              <Maximize className="size-4" />
+              <Copy className="size-4" />
             )}
           </button>
+          {!isMobile && (
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              className="flex size-8 items-center justify-center rounded-md border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              {isFullscreen ? (
+                <Minimize className="size-4" />
+              ) : (
+                <Maximize className="size-4" />
+              )}
+            </button>
+          )}
         </div>
       </header>
 
-      <main className="flex flex-1 items-stretch justify-center px-4 pb-28">
+      <main className="flex flex-1 items-start justify-center overflow-y-auto px-4 pb-28 sm:items-center">
         {isSpotlight && focusedPeerId ? (
           <SpotlightView
             participants={participants}
             focusedPeerId={focusedPeerId}
-            screenSharing={mediaState.screenSharing}
+            mirrorLocal={mirrorLocal}
             localSpeaking={localSpeaking}
             onFocus={setFocusedPeerId}
             onExit={() => setFocusedPeerId(null)}
@@ -288,7 +334,7 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
           <div className="flex w-full items-center justify-center">
             <ParticipantGrid
               participants={participants}
-              screenSharing={mediaState.screenSharing}
+              mirrorLocal={mirrorLocal}
               localSpeaking={localSpeaking}
               onFocus={setFocusedPeerId}
             />
@@ -301,8 +347,11 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
         localSpeaking={localSpeaking}
         chatOpen={chatOpen}
         chatUnread={chatUnread}
+        isMobile={isMobile}
+        canScreenShare={canScreenShare}
         onToggleAudio={toggleAudio}
         onToggleVideo={toggleVideo}
+        onFlipCamera={() => void switchCamera()}
         onToggleScreenShare={() => {
           if (mediaState.screenSharing) void stopScreenShare()
           else void startScreenShare()

@@ -55,6 +55,7 @@ export function LocalPreview({
       <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-3 bg-gradient-to-t from-black/60 to-transparent p-4">
         <PreviewToggle
           off={!mediaState.audioEnabled}
+          disabled={!mediaState.hasMic}
           onClick={onToggleAudio}
           label={mediaState.audioEnabled ? 'Mute microphone' : 'Unmute microphone'}
         >
@@ -66,6 +67,7 @@ export function LocalPreview({
         </PreviewToggle>
         <PreviewToggle
           off={!mediaState.videoEnabled}
+          disabled={!mediaState.hasCamera}
           onClick={onToggleVideo}
           label={mediaState.videoEnabled ? 'Turn camera off' : 'Turn camera on'}
         >
@@ -85,21 +87,25 @@ function PreviewToggle({
   onClick,
   label,
   off,
+  disabled,
 }: {
   children: React.ReactNode
   onClick: () => void
   label: string
   off?: boolean
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-label={label}
       title={label}
       className={cn(
         'flex size-11 items-center justify-center rounded-full text-white transition-colors',
         off ? 'bg-red-500/90 hover:bg-red-500' : 'bg-white/10 hover:bg-white/20',
+        disabled && 'cursor-not-allowed opacity-40 hover:bg-white/10',
       )}
     >
       {children}

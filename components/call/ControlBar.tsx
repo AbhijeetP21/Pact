@@ -8,6 +8,7 @@ import {
   MicOff,
   MonitorUp,
   PhoneOff,
+  SwitchCamera,
   Video,
   VideoOff,
 } from 'lucide-react'
@@ -20,8 +21,13 @@ export type ControlBarProps = {
   localSpeaking: boolean
   chatOpen: boolean
   chatUnread: number
+  /** Phone/tablet: show flip-camera, hide CPU-heavy effects. */
+  isMobile: boolean
+  /** Screen capture is supported (hidden on iOS Safari). */
+  canScreenShare: boolean
   onToggleAudio: () => void
   onToggleVideo: () => void
+  onFlipCamera: () => void
   onToggleScreenShare: () => void
   onToggleNoiseSuppression: () => void
   onToggleBackgroundBlur: () => void
@@ -29,14 +35,21 @@ export type ControlBarProps = {
   onLeave: () => void
 }
 
-/** Fixed, pill-shaped call controls: mic, camera, screen share, chat, leave. */
+/**
+ * Fixed, pill-shaped call controls. The set adapts to the device: phones get a
+ * flip-camera button and drop the CPU-heavy effects (blur, noise) and screen
+ * share, which keeps the bar from overflowing a narrow screen.
+ */
 export function ControlBar({
   mediaState,
   localSpeaking,
   chatOpen,
   chatUnread,
+  isMobile,
+  canScreenShare,
   onToggleAudio,
   onToggleVideo,
+  onFlipCamera,
   onToggleScreenShare,
   onToggleNoiseSuppression,
   onToggleBackgroundBlur,
@@ -44,11 +57,15 @@ export function ControlBar({
   onLeave,
 }: ControlBarProps) {
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-6 flex justify-center px-4">
+    <div
+      className="pointer-events-none fixed inset-x-0 flex justify-center px-4"
+      style={{ bottom: 'calc(env(safe-area-inset-bottom) + 1rem)' }}
+    >
       <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-white/10 bg-zinc-900/90 p-2 shadow-lg backdrop-blur">
         <ControlButton
           active={!mediaState.audioEnabled}
           speaking={mediaState.audioEnabled && localSpeaking}
+          disabled={!mediaState.hasMic}
           onClick={onToggleAudio}
           label={mediaState.audioEnabled ? 'Mute microphone' : 'Unmute microphone'}
         >
@@ -61,6 +78,7 @@ export function ControlBar({
 
         <ControlButton
           active={!mediaState.videoEnabled}
+          disabled={!mediaState.hasCamera}
           onClick={onToggleVideo}
           label={mediaState.videoEnabled ? 'Turn camera off' : 'Turn camera on'}
         >
@@ -71,40 +89,55 @@ export function ControlBar({
           )}
         </ControlButton>
 
-        <ControlButton
-          active={mediaState.noiseSuppression}
-          highlight
-          onClick={onToggleNoiseSuppression}
-          label={
-            mediaState.noiseSuppression
-              ? 'Noise cancellation on'
-              : 'Noise cancellation off'
-          }
-        >
-          <AudioLines className="size-5" />
-        </ControlButton>
+        {isMobile && mediaState.hasCamera && (
+          <ControlButton onClick={onFlipCamera} label="Flip camera">
+            <SwitchCamera className="size-5" />
+          </ControlButton>
+        )}
 
-        <ControlButton
-          active={mediaState.backgroundBlur}
-          highlight
-          onClick={onToggleBackgroundBlur}
-          label={
-            mediaState.backgroundBlur
-              ? 'Background blur on'
-              : 'Background blur off'
-          }
-        >
-          <Aperture className="size-5" />
-        </ControlButton>
+        {/* CPU-heavy effects are desktop-only — they overheat phones in a mesh. */}
+        {!isMobile && (
+          <>
+            <ControlButton
+              active={mediaState.noiseSuppression}
+              highlight
+              onClick={onToggleNoiseSuppression}
+              label={
+                mediaState.noiseSuppression
+                  ? 'Noise cancellation on'
+                  : 'Noise cancellation off'
+              }
+            >
+              <AudioLines className="size-5" />
+            </ControlButton>
 
-        <ControlButton
-          active={mediaState.screenSharing}
-          highlight
-          onClick={onToggleScreenShare}
-          label={mediaState.screenSharing ? 'Stop sharing screen' : 'Share screen'}
-        >
-          <MonitorUp className="size-5" />
-        </ControlButton>
+            <ControlButton
+              active={mediaState.backgroundBlur}
+              highlight
+              onClick={onToggleBackgroundBlur}
+              label={
+                mediaState.backgroundBlur
+                  ? 'Background blur on'
+                  : 'Background blur off'
+              }
+            >
+              <Aperture className="size-5" />
+            </ControlButton>
+          </>
+        )}
+
+        {canScreenShare && (
+          <ControlButton
+            active={mediaState.screenSharing}
+            highlight
+            onClick={onToggleScreenShare}
+            label={
+              mediaState.screenSharing ? 'Stop sharing screen' : 'Share screen'
+            }
+          >
+            <MonitorUp className="size-5" />
+          </ControlButton>
+        )}
 
         <ControlButton
           active={chatOpen}
@@ -135,6 +168,7 @@ function ControlButton({
   highlight,
   speaking,
   badge,
+  disabled,
 }: {
   children: React.ReactNode
   onClick: () => void
@@ -144,11 +178,13 @@ function ControlButton({
   highlight?: boolean
   speaking?: boolean
   badge?: number
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-label={label}
       title={label}
       className={cn(
@@ -158,6 +194,7 @@ function ControlButton({
         highlight && active && 'bg-primary hover:bg-primary/90',
         destructive && 'bg-red-500/90 hover:bg-red-500',
         speaking && 'bg-primary/20',
+        disabled && 'cursor-not-allowed opacity-40 hover:bg-white/5',
       )}
     >
       {speaking && (

@@ -12,6 +12,10 @@ import type {
   SignalMessage,
 } from '@/types'
 
+// Fail the join if the channel hasn't subscribed within this window, rather
+// than leaving the UI stuck on "Connecting…".
+const SUBSCRIBE_TIMEOUT_MS = 10_000
+
 type Callbacks = {
   /** Full roster of peers already present (excludes self). Fires on every sync. */
   onPresenceSync: (existing: PresencePayload[]) => void
@@ -118,10 +122,21 @@ export class SignalingService {
       // Once we've successfully subscribed, later status changes (notably
       // CLOSED during leave()) are normal teardown — not failures.
       let settled = false
+      // Guard against a subscribe that never reaches a terminal status (flaky
+      // network): without this the join() promise — and the UI — hangs forever.
+      const timeout = setTimeout(() => {
+        if (settled) return
+        settled = true
+        rtcError('Signaling', 'subscription timed out')
+        reject(new Error('Signaling subscription timed out'))
+      }, SUBSCRIBE_TIMEOUT_MS)
+
       channel.subscribe(async (status, err) => {
         rtcLog('Signaling', `channel status: ${status}`)
         if (status === 'SUBSCRIBED') {
+          if (settled) return
           settled = true
+          clearTimeout(timeout)
           await channel.track(payload)
           rtcLog('Signaling', `tracking self as ${this.myPeerId}`)
           resolve()
@@ -131,6 +146,8 @@ export class SignalingService {
             status === 'TIMED_OUT' ||
             status === 'CLOSED')
         ) {
+          settled = true
+          clearTimeout(timeout)
           rtcError('Signaling', `subscription failed: ${status}`, err)
           reject(new Error(`Signaling subscription failed: ${status}`))
         }

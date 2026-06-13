@@ -14,6 +14,9 @@ const INITIAL_STATE: MediaState = {
   // suppression (always on via getUserMedia) handles most cases cleanly.
   noiseSuppression: false,
   backgroundBlur: false,
+  hasCamera: true,
+  hasMic: true,
+  facingMode: 'user',
   localStream: null,
   displayStream: null,
 }
@@ -41,6 +44,9 @@ export function useMedia() {
       localStream: stream,
       audioEnabled: manager.hasAudio(),
       videoEnabled: manager.hasVideo(),
+      hasCamera: manager.hasVideo(),
+      hasMic: manager.hasAudio(),
+      facingMode: manager.getFacingMode(),
     }))
     return stream
   }, [manager])
@@ -78,11 +84,31 @@ export function useMedia() {
   }, [manager])
 
   const toggleVideo = useCallback(() => {
+    // No camera → nothing to toggle (avoids a "video on" state with no track).
+    if (!manager.hasVideo()) return
     setMediaState((prev) => {
       const next = !prev.videoEnabled
       manager.setTrackEnabled('video', next)
       return { ...prev, videoEnabled: next }
     })
+  }, [manager])
+
+  /**
+   * Flip between front and rear camera (mobile). Returns the new video track so
+   * the caller can swap it on its peer connections.
+   */
+  const switchCamera = useCallback(async () => {
+    const track = await manager.switchCamera()
+    if (track) {
+      // Same MediaStream object, swapped track — bump state so the preview
+      // re-binds reliably across browsers.
+      setMediaState((prev) => ({
+        ...prev,
+        localStream: manager.getLocalStream(),
+        facingMode: manager.getFacingMode(),
+      }))
+    }
+    return track
   }, [manager])
 
   /** Begin screen sharing; returns the display video track for sender swap. */
@@ -116,6 +142,7 @@ export function useMedia() {
     acquireLocalStream,
     toggleAudio,
     toggleVideo,
+    switchCamera,
     toggleNoiseSuppression,
     toggleBackgroundBlur,
     startScreenShare,

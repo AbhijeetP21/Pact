@@ -14,14 +14,15 @@ import { VideoTile } from '@/components/call/VideoTile'
 export function SpotlightView({
   participants,
   focusedPeerId,
-  screenSharing,
+  mirrorLocal,
   localSpeaking,
   onFocus,
   onExit,
 }: {
   participants: Participant[]
   focusedPeerId: string
-  screenSharing: boolean
+  /** Mirror the local tile (front camera, not screen-sharing). */
+  mirrorLocal: boolean
   localSpeaking: boolean
   onFocus: (peerId: string) => void
   onExit: () => void
@@ -35,7 +36,7 @@ export function SpotlightView({
       <div className="relative min-h-0 min-w-0 flex-1">
         <VideoTile
           participant={focused}
-          mirror={focused.isLocal && !screenSharing}
+          mirror={focused.isLocal && mirrorLocal}
           localSpeaking={focused.isLocal ? localSpeaking : undefined}
           objectFit="contain"
         />
@@ -62,7 +63,7 @@ export function SpotlightView({
             >
               <VideoTile
                 participant={p}
-                mirror={p.isLocal && !screenSharing}
+                mirror={p.isLocal && mirrorLocal}
                 localSpeaking={p.isLocal ? localSpeaking : undefined}
                 compact
               />
