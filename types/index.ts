@@ -58,6 +58,11 @@ export type MediaState = {
   screenSharing: boolean
   noiseSuppression: boolean
   backgroundBlur: boolean
+  /** Whether a camera/mic device is actually present (drives disabled toggles). */
+  hasCamera: boolean
+  hasMic: boolean
+  /** Active camera; the rear camera is shown un-mirrored, like the front isn't. */
+  facingMode: 'user' | 'environment'
   localStream: MediaStream | null
   displayStream: MediaStream | null
 }

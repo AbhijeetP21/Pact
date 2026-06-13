@@ -8,16 +8,17 @@ import { VideoTile } from '@/components/call/VideoTile'
  * Responsive grid for 1–5 participants with the spec's exact layouts:
  *   1 → single        2 → side by side       3 → 2 over 1 (centered)
  *   4 → 2×2           5 → 2 over 3
- * Collapses to a vertical stack on small screens.
+ * On phones it collapses to a uniform 2-column grid (1 → full width).
  */
 export function ParticipantGrid({
   participants,
-  screenSharing,
+  mirrorLocal,
   localSpeaking,
   onFocus,
 }: {
   participants: Participant[]
-  screenSharing: boolean
+  /** Mirror the local tile (front camera, not screen-sharing). */
+  mirrorLocal: boolean
   localSpeaking: boolean
   onFocus?: (peerId: string) => void
 }) {
@@ -28,7 +29,7 @@ export function ParticipantGrid({
       className={cn(
         'mx-auto grid w-full max-w-6xl gap-3',
         gridClass(count),
-        'max-sm:grid-cols-1',
+        count > 1 && 'max-sm:grid-cols-2',
       )}
     >
       {participants.map((p, i) => (
@@ -38,7 +39,7 @@ export function ParticipantGrid({
         >
           <VideoTile
             participant={p}
-            mirror={p.isLocal && !screenSharing}
+            mirror={p.isLocal && mirrorLocal}
             localSpeaking={p.isLocal ? localSpeaking : undefined}
             onExpand={onFocus ? () => onFocus(p.peerId) : undefined}
           />

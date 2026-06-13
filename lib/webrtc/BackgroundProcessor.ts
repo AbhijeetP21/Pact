@@ -6,6 +6,7 @@ import { rtcError, rtcLog } from '@/lib/webrtc/log'
 const ASSET_PATH = '/mediapipe'
 const BLUR_PX = 12
 const FPS = 30
+const FRAME_INTERVAL_MS = 1000 / FPS
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnySegmentation = any
@@ -97,12 +98,20 @@ export class BackgroundProcessor {
     this.segmentation = segmentation
     this.running = true
 
+    // The output canvas is sampled at FPS, so there's no point segmenting any
+    // faster than that. requestAnimationFrame runs at the display refresh
+    // (often 60Hz+); gate the (CPU-heavy) segment + composite to ~FPS.
+    let lastSent = 0
     const pump = async () => {
       if (!this.running || !this.video) return
-      try {
-        await segmentation.send({ image: this.video })
-      } catch {
-        // transient frame error — keep going
+      const now = performance.now()
+      if (now - lastSent >= FRAME_INTERVAL_MS) {
+        lastSent = now
+        try {
+          await segmentation.send({ image: this.video })
+        } catch {
+          // transient frame error — keep going
+        }
       }
       if (this.running) this.raf = requestAnimationFrame(() => void pump())
     }

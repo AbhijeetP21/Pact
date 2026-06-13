@@ -6,6 +6,7 @@ import {
   NoiseSuppressor,
   tryCreateSuppressor,
 } from '@/lib/webrtc/NoiseSuppressor'
+import { isLikelyMobile } from '@/lib/utils'
 import { rtcError, rtcLog } from '@/lib/webrtc/log'
 
 // Always request the browser's built-in DSP (echo cancellation, noise
@@ -17,18 +18,41 @@ const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   autoGainControl: true,
 }
 
+type FacingMode = 'user' | 'environment'
+
+/**
+ * Ideal video constraints for a given camera. Phones capture at a lower
+ * resolution/frame rate: in a mesh each device uploads its stream to up to four
+ * peers, so 720p would drain battery and cellular data for little benefit on a
+ * small screen.
+ */
+function videoConstraints(facingMode: FacingMode): MediaTrackConstraints {
+  if (isLikelyMobile()) {
+    return {
+      width: { ideal: 640 },
+      height: { ideal: 480 },
+      frameRate: { ideal: 24, max: 30 },
+      facingMode: { ideal: facingMode },
+    }
+  }
+  return {
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+    facingMode: { ideal: facingMode },
+  }
+}
+
 // Constraint sets tried in order, most-capable first. getUserMedia falls back
 // gracefully so a user with no camera (or who denies video) can still join
 // with audio only.
-const CONSTRAINT_FALLBACKS: MediaStreamConstraints[] = [
-  {
-    video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-    audio: AUDIO_CONSTRAINTS,
-  },
-  { video: true, audio: AUDIO_CONSTRAINTS },
-  { video: false, audio: AUDIO_CONSTRAINTS },
-  { video: true, audio: false },
-]
+function constraintFallbacks(facingMode: FacingMode): MediaStreamConstraints[] {
+  return [
+    { video: videoConstraints(facingMode), audio: AUDIO_CONSTRAINTS },
+    { video: { facingMode: { ideal: facingMode } }, audio: AUDIO_CONSTRAINTS },
+    { video: false, audio: AUDIO_CONSTRAINTS },
+    { video: { facingMode: { ideal: facingMode } }, audio: false },
+  ]
+}
 
 /**
  * Owns the local media: the raw camera/mic stream, an optional RNNoise-cleaned
@@ -46,6 +70,7 @@ export class MediaManager {
   private blurredTrack: MediaStreamTrack | null = null
   private audioEnabled = true
   private videoEnabled = true
+  private facingMode: FacingMode = 'user'
 
   /**
    * Acquire camera/mic, optionally routing the mic through RNNoise, and return
@@ -84,7 +109,7 @@ export class MediaManager {
 
   private async getUserMediaWithFallback(): Promise<MediaStream> {
     let lastError: unknown = null
-    for (const constraints of CONSTRAINT_FALLBACKS) {
+    for (const constraints of constraintFallbacks(this.facingMode)) {
       try {
         return await navigator.mediaDevices.getUserMedia(constraints)
       } catch (err) {
@@ -227,6 +252,58 @@ export class MediaManager {
   stopDisplayStream(): void {
     this.displayStream?.getTracks().forEach((t) => t.stop())
     this.displayStream = null
+  }
+
+  getFacingMode(): FacingMode {
+    return this.facingMode
+  }
+
+  /**
+   * Flip between the front and rear camera (mobile). Acquires the other camera,
+   * swaps it into the raw + outbound streams, and returns the new video track
+   * so the caller can replaceTrack on its peers. Returns null if there's no
+   * camera or the switch fails (the existing track is left untouched).
+   *
+   * Background blur is hidden on mobile, so this is always the no-blur path.
+   */
+  async switchCamera(): Promise<MediaStreamTrack | null> {
+    if (!this.rawStream || this.rawStream.getVideoTracks().length === 0) {
+      return null
+    }
+    const next: FacingMode = this.facingMode === 'user' ? 'environment' : 'user'
+
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints(next),
+        audio: false,
+      })
+    } catch (err) {
+      rtcError('Media', 'camera switch failed; keeping current camera', err)
+      return null
+    }
+
+    const newTrack = stream.getVideoTracks()[0] ?? null
+    if (!newTrack) return null
+    this.facingMode = next
+    newTrack.enabled = this.videoEnabled
+
+    // Replace the raw camera track (stop the old one to release the device).
+    for (const t of this.rawStream.getVideoTracks()) {
+      this.rawStream.removeTrack(t)
+      t.stop()
+    }
+    this.rawStream.addTrack(newTrack)
+
+    if (this.localStream) {
+      for (const t of this.localStream.getVideoTracks()) {
+        this.localStream.removeTrack(t)
+      }
+      this.localStream.addTrack(newTrack)
+    }
+
+    rtcLog('Media', `switched camera to ${next}`)
+    return newTrack
   }
 
   enumerateDevices(): Promise<MediaDeviceInfo[]> {

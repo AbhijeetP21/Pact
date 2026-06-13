@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 
+import { getSharedAudioContext } from '@/lib/audio/sharedAudioContext'
+
 // Average frequency magnitude (0–255) above which we treat the track as
 // "speaking". Tuned to ignore room/keyboard noise but catch normal speech.
 const SPEAKING_THRESHOLD = 18
@@ -28,15 +30,10 @@ export function useAudioLevel(
       return
     }
 
-    const AudioCtx =
-      window.AudioContext ??
-      (window as unknown as { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext
-    if (!AudioCtx) return
+    // One AudioContext is shared across all tiles (see sharedAudioContext).
+    const ctx = getSharedAudioContext()
+    if (!ctx) return
 
-    const ctx = new AudioCtx()
-    // Contexts created before a user gesture start suspended; resume best-effort.
-    void ctx.resume().catch(() => {})
     const source = ctx.createMediaStreamSource(stream)
     const analyser = ctx.createAnalyser()
     analyser.fftSize = 512
@@ -73,7 +70,7 @@ export function useAudioLevel(
       } catch {
         // already disconnected
       }
-      void ctx.close().catch(() => {})
+      // The context is shared and intentionally left open for other tiles.
     }
   }, [stream, enabled])
 
