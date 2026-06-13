@@ -41,6 +41,9 @@ AGENTS.md
 # personal project notes (interview prep, resume material; keep private)
 PROJECT_DOSSIER.md
 
+# local audit reports (internal security findings; keep private)
+.projectmaid/
+
 # vercel
 .vercel
 

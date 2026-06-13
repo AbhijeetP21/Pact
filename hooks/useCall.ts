@@ -8,6 +8,7 @@ import { PeerManager } from '@/lib/webrtc/PeerManager'
 import { SignalingService } from '@/lib/webrtc/SignalingService'
 import { useMedia } from '@/hooks/useMedia'
 import { useParticipants } from '@/hooks/useParticipants'
+import { MAX_DISPLAY_NAME_LENGTH } from '@/lib/utils'
 import { rtcError, rtcLog } from '@/lib/webrtc/log'
 import type {
   CallStatus,
@@ -24,6 +25,13 @@ const FALLBACK_ICE: RTCIceServer[] = [
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
 ]
+
+// Max characters per chat message (same on send and receive).
+const MAX_CHAT_LENGTH = 2000
+// Cap on messages retained in memory. Untrusted peers could otherwise flood
+// the room and grow this array without bound; we keep only the most recent.
+// This is a message count, not a character limit — long messages are untouched.
+const MAX_CHAT_MESSAGES = 1000
 
 // Delay before recreating a peer whose ICE connection failed.
 const RECONNECT_DELAY_MS = 2000
@@ -60,6 +68,14 @@ export type UseCallReturn = {
   startScreenShare: () => Promise<void>
   stopScreenShare: () => void
   leaveCall: () => Promise<void>
+}
+
+/** Append a chat message, keeping at most MAX_CHAT_MESSAGES (drops oldest). */
+function appendChat(prev: ChatMessage[], message: ChatMessage): ChatMessage[] {
+  const next = [...prev, message]
+  return next.length > MAX_CHAT_MESSAGES
+    ? next.slice(next.length - MAX_CHAT_MESSAGES)
+    : next
 }
 
 async function fetchIceServers(): Promise<RTCIceServer[]> {
@@ -351,7 +367,18 @@ export function useCall({
         peerManagerRef.current?.signal(fromPeerId, data)
       },
       onChatMessage: (message) =>
-        setChatMessages((prev) => [...prev, message]),
+        setChatMessages((prev) =>
+          // Inbound payloads are untrusted: clamp the length-bearing fields and
+          // cap retention so a peer can't flood us out of memory.
+          appendChat(prev, {
+            ...message,
+            text: String(message.text ?? '').slice(0, MAX_CHAT_LENGTH),
+            displayName: String(message.displayName ?? '').slice(
+              0,
+              MAX_DISPLAY_NAME_LENGTH,
+            ),
+          }),
+        ),
       onMediaFlags: ({ peerId, audioEnabled, videoEnabled }) => {
         remoteFlagsRef.current.set(peerId, { audioEnabled, videoEnabled })
         patch(peerId, { audioEnabled, videoEnabled })
@@ -375,11 +402,11 @@ export function useCall({
         id: nanoid(8),
         from: self.peerId,
         displayName: self.displayName,
-        text: trimmed.slice(0, 2000),
+        text: trimmed.slice(0, MAX_CHAT_LENGTH),
         at: Date.now(),
       }
       // broadcast { self: false } means we won't receive our own — append now.
-      setChatMessages((prev) => [...prev, message])
+      setChatMessages((prev) => appendChat(prev, message))
       void signalingRef.current.sendChat(message)
     },
     [self],

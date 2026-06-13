@@ -9,7 +9,11 @@ import { createServerClient } from '@/lib/supabase/server'
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
-  const next = searchParams.get('next') ?? '/'
+  // `next` is attacker-controllable (it rides in the link). Only allow a
+  // same-origin relative path — reject absolute (`https://evil`) and
+  // protocol-relative (`//evil`) values to prevent an open redirect.
+  const rawNext = searchParams.get('next') ?? '/'
+  const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/'
 
   if (code) {
     const supabase = await createServerClient()
