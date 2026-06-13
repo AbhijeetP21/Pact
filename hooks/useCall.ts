@@ -402,6 +402,9 @@ export function useCall({
       await signaling.join(slug, self)
     } catch (err) {
       signalingRef.current = null
+      // Release the half-open channel (e.g. on subscribe timeout) so it doesn't
+      // linger subscribed until the page reloads.
+      void signaling.leave()
       if (cancelledRef.current) return
       rtcError('Call', 'signaling join failed', err)
       setCallStatus('error')
