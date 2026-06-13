@@ -272,14 +272,24 @@ export class MediaManager {
     }
     const next: FacingMode = this.facingMode === 'user' ? 'environment' : 'user'
 
-    let stream: MediaStream
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: videoConstraints(next),
-        audio: false,
-      })
-    } catch (err) {
-      rtcError('Media', 'camera switch failed; keeping current camera', err)
+    // `exact` forces the OS to actually switch lenses. Many phones treat
+    // `ideal` as a soft hint and hand back the *same* camera, so the flip looks
+    // dead. Fall back to `ideal` for devices that can't satisfy `exact` (e.g. a
+    // tablet/laptop with a single camera), which simply re-acquires what we have.
+    let stream: MediaStream | null = null
+    for (const facingMode of [{ exact: next }, { ideal: next }] as const) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { ...videoConstraints(next), facingMode },
+          audio: false,
+        })
+        break
+      } catch (err) {
+        rtcError('Media', `camera switch (${JSON.stringify(facingMode)}) failed`, err)
+      }
+    }
+    if (!stream) {
+      rtcError('Media', 'camera switch failed; keeping current camera')
       return null
     }
 
