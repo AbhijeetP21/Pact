@@ -30,11 +30,19 @@ export type SignalMessage = {
   data: object // simple-peer signal payload (SDP or ICE candidate)
 }
 
+/** A pasted image attached to a chat message (compressed JPEG data URL). */
+export type ChatImage = {
+  src: string // data:image/jpeg;base64,…
+  width: number // intrinsic px (drives the thumbnail aspect ratio)
+  height: number
+}
+
 export type ChatMessage = {
   id: string
   from: string // sender peerId
   displayName: string
-  text: string
+  text: string // may be '' for an image-only message
+  image?: ChatImage // optional pasted image (one per message)
   at: number // epoch ms — when it was sent
 }
 
