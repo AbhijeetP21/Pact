@@ -264,7 +264,7 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
 
   // Active call (connecting / connected / reconnecting).
   return (
-    <div ref={rootRef} className="flex min-h-dvh flex-col bg-background">
+    <div ref={rootRef} className="flex h-dvh flex-col bg-background">
       <header className="flex items-center justify-between gap-4 px-6 py-4">
         <div>
           <h1 className="text-sm font-medium">{roomName ?? 'Private room'}</h1>
