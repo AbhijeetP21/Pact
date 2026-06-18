@@ -32,7 +32,8 @@ export function LocalPreview({
   return (
     <div
       className={cn(
-        'relative aspect-video w-full overflow-hidden rounded-xl border bg-zinc-900 transition-shadow',
+        // Portrait, FaceTime-style preview on phones; landscape on desktop.
+        'relative aspect-[3/4] w-full overflow-hidden rounded-xl border bg-zinc-900 transition-shadow sm:aspect-video',
         speaking
           ? 'border-primary shadow-[0_0_0_2px_var(--color-primary)]'
           : 'border-white/[0.08]',
