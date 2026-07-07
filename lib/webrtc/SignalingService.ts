@@ -29,6 +29,9 @@ type Callbacks = {
   onChatMessage: (message: ChatMessage) => void
   /** A peer announced its mic/camera on-off state. */
   onMediaFlags: (payload: MediaFlagsPayload) => void
+  /** The channel dropped *after* a successful join (server-side error/close,
+   * not an intentional leave). Fires at most once per service instance. */
+  onChannelDied: () => void
 }
 
 /**
@@ -42,6 +45,11 @@ type Callbacks = {
 export class SignalingService {
   private channel: RealtimeChannel | null = null
   private readonly supabase = createClient()
+  // Set during leave() so the resulting CLOSED status isn't mistaken for a
+  // server-side channel death. Each join builds a fresh service, so this
+  // never needs resetting.
+  private leaving = false
+  private diedReported = false
 
   constructor(
     private readonly myPeerId: string,
@@ -141,15 +149,24 @@ export class SignalingService {
           rtcLog('Signaling', `tracking self as ${this.myPeerId}`)
           resolve()
         } else if (
-          !settled &&
-          (status === 'CHANNEL_ERROR' ||
-            status === 'TIMED_OUT' ||
-            status === 'CLOSED')
+          status === 'CHANNEL_ERROR' ||
+          status === 'TIMED_OUT' ||
+          status === 'CLOSED'
         ) {
-          settled = true
-          clearTimeout(timeout)
-          rtcError('Signaling', `subscription failed: ${status}`, err)
-          reject(new Error(`Signaling subscription failed: ${status}`))
+          if (!settled) {
+            settled = true
+            clearTimeout(timeout)
+            rtcError('Signaling', `subscription failed: ${status}`, err)
+            reject(new Error(`Signaling subscription failed: ${status}`))
+          } else if (!this.leaving && !this.diedReported) {
+            // The channel died *after* we joined (Realtime restart, websocket
+            // drop without a browser offline event). Media keeps flowing P2P,
+            // but presence/signaling silently freeze — tell the caller so it
+            // can rejoin.
+            this.diedReported = true
+            rtcError('Signaling', `channel dropped after join: ${status}`, err)
+            this.callbacks.onChannelDied()
+          }
         }
       })
     })
@@ -200,6 +217,7 @@ export class SignalingService {
   }
 
   async leave(): Promise<void> {
+    this.leaving = true
     if (!this.channel) return
     rtcLog('Signaling', 'leaving channel')
     try {
