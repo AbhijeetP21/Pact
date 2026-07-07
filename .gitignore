@@ -37,6 +37,7 @@ yarn-error.log*
 # local tooling / agent instructions (not part of the app)
 CLAUDE.md
 AGENTS.md
+.claude/
 
 # personal project notes (interview prep, resume material; keep private)
 PROJECT_DOSSIER.md
