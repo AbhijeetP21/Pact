@@ -90,10 +90,22 @@ export async function compressImage(file: Blob): Promise<ChatImage> {
  * undefined — guards against a malicious peer sending a non-image or an
  * oversized data URL that would bloat memory.
  */
+// Raster formats only. A broad `data:image/` prefix check would also admit
+// SVG, which can carry scripts — harmless in a plain <img> today, but not
+// worth trusting from a peer.
+const ALLOWED_IMAGE_PREFIXES = [
+  'data:image/jpeg;base64,',
+  'data:image/png;base64,',
+  'data:image/webp;base64,',
+]
+
 export function sanitizeChatImage(value: unknown): ChatImage | undefined {
   if (!value || typeof value !== 'object') return undefined
   const img = value as Partial<ChatImage>
-  if (typeof img.src !== 'string' || !img.src.startsWith('data:image/')) {
+  if (
+    typeof img.src !== 'string' ||
+    !ALLOWED_IMAGE_PREFIXES.some((p) => img.src!.startsWith(p))
+  ) {
     return undefined
   }
   // Allow some headroom over the send budget, but cap hard.

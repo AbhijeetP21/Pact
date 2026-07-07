@@ -36,12 +36,18 @@ export class PeerManager {
   private localStream: MediaStream | null = null
 
   constructor(
-    private readonly iceServers: RTCIceServer[],
+    private iceServers: RTCIceServer[],
     private readonly callbacks: Callbacks,
   ) {}
 
   setLocalStream(stream: MediaStream): void {
     this.localStream = stream
+  }
+
+  /** Swap the ICE server list used for peers created from now on (existing
+   * connections keep theirs). Lets a rejoin pick up fresh TURN credentials. */
+  setIceServers(iceServers: RTCIceServer[]): void {
+    this.iceServers = iceServers
   }
 
   hasPeer(peerId: string): boolean {

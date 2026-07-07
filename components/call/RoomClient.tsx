@@ -80,6 +80,7 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
     callStatus,
     inLobby,
     roomFull,
+    turnAvailable,
     selfPeerId,
     chatMessages,
     sendChat,
@@ -218,6 +219,10 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
                 This room is full ({maxParticipants}/{maxParticipants}{' '}
                 participants)
               </p>
+              <p className="text-xs text-muted-foreground">
+                Pact connects everyone directly to everyone else, with no media
+                server in between — small rooms are what keep calls smooth.
+              </p>
               <Link
                 href="/"
                 className={cn(buttonVariants({ variant: 'outline' }), 'w-full')}
@@ -227,6 +232,18 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
             </div>
           ) : (
             <>
+              {turnAvailable === false && (
+                <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
+                  <p className="text-sm font-medium text-amber-600 dark:text-amber-400">
+                    Relay server unavailable
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Calls between some networks may not connect right now. You
+                    can still join — people on the same network usually connect
+                    fine.
+                  </p>
+                </div>
+              )}
               {/* Effects are CPU-heavy; hidden on mobile to protect battery. */}
               {!isMobile && (
                 <div className="space-y-2">

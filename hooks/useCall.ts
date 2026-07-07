@@ -35,8 +35,10 @@ const MAX_CHAT_LENGTH = 2000
 // This is a message count, not a character limit — long messages are untouched.
 const MAX_CHAT_MESSAGES = 1000
 
-// Delay before recreating a peer whose ICE connection failed.
-const RECONNECT_DELAY_MS = 2000
+// Base delay before recreating a peer whose ICE connection failed; doubles on
+// each attempt (1s, 2s, 4s, 8s, 16s) so persistent failures back off instead
+// of hammering a connection that isn't coming back quickly.
+const RECONNECT_BASE_DELAY_MS = 1000
 
 // Cap reconnect attempts so a peer that failed but never fired a presence
 // 'leave' (crashed tab / network partition) doesn't loop forever every 2s.
@@ -58,6 +60,9 @@ export type UseCallReturn = {
   inLobby: boolean
   /** Room is at capacity — joining is blocked. */
   roomFull: boolean
+  /** Whether a TURN relay is available; null until the first fetch resolves.
+   * false means calls between some networks may not connect. */
+  turnAvailable: boolean | null
   /** Ephemeral session chat (not persisted; cleared on leave). */
   chatMessages: ChatMessage[]
   sendChat: (text: string, image?: ChatImage) => void
@@ -80,15 +85,27 @@ function appendChat(prev: ChatMessage[], message: ChatMessage): ChatMessage[] {
     : next
 }
 
-async function fetchIceServers(): Promise<RTCIceServer[]> {
+type IceConfig = {
+  iceServers: RTCIceServer[]
+  /** Whether the list includes a TURN relay (drives the lobby warning). */
+  turnAvailable: boolean
+}
+
+function hasTurnUrl(server: RTCIceServer): boolean {
+  const urls = Array.isArray(server.urls) ? server.urls : [server.urls]
+  return urls.some((u) => typeof u === 'string' && u.startsWith('turn'))
+}
+
+async function fetchIceServers(): Promise<IceConfig> {
   try {
     const res = await fetch('/api/ice-servers')
     if (!res.ok) throw new Error(`status ${res.status}`)
     const data = (await res.json()) as { iceServers?: RTCIceServer[] }
-    return data.iceServers?.length ? data.iceServers : FALLBACK_ICE
+    const iceServers = data.iceServers?.length ? data.iceServers : FALLBACK_ICE
+    return { iceServers, turnAvailable: iceServers.some(hasTurnUrl) }
   } catch (err) {
     rtcError('Call', 'ICE fetch failed; using STUN fallback', err)
-    return FALLBACK_ICE
+    return { iceServers: FALLBACK_ICE, turnAvailable: false }
   }
 }
 
@@ -114,6 +131,7 @@ export function useCall({
   // then 'connecting' → 'connected' after the user joins.
   const [callStatus, setCallStatus] = useState<CallStatus>('acquiring-media')
   const [roomFull, setRoomFull] = useState(false)
+  const [turnAvailable, setTurnAvailable] = useState<boolean | null>(null)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
 
   // Stable identity for this session.
@@ -135,6 +153,12 @@ export function useCall({
     new Map(),
   )
   const reconnectAttemptsRef = useRef<Map<string, number>>(new Map())
+  // Guards overlapping rejoin() runs (flapping online events, channel death
+  // mid-rejoin) — mirrors the creatingRef pattern for peer creation.
+  const rejoiningRef = useRef(false)
+  // Late-bound so buildSignaling (defined before rejoin) can trigger a rejoin
+  // when the signaling channel dies without a circular dependency.
+  const rejoinRef = useRef<() => void>(() => {})
   const cancelledRef = useRef(false)
   // Latest local mic/camera state, mirrored for broadcasting to peers.
   const mediaFlagsRef = useRef({ audioEnabled: true, videoEnabled: true })
@@ -209,6 +233,7 @@ export function useCall({
         )
         return
       }
+      const delay = RECONNECT_BASE_DELAY_MS * 2 ** attempts
       const timer = setTimeout(() => {
         reconnectTimersRef.current.delete(peerId)
         const joinedAt = joinedAtRef.current.get(peerId)
@@ -217,10 +242,10 @@ export function useCall({
         reconnectAttemptsRef.current.set(peerId, attempts + 1)
         rtcLog(
           'Call',
-          `reconnecting peer ${peerId} after ICE failure (attempt ${attempts + 1})`,
+          `reconnecting peer ${peerId} after ICE failure (attempt ${attempts + 1}, waited ${delay}ms)`,
         )
         void pm.createPeer(peerId, isInitiator(joinedAt, peerId))
-      }, RECONNECT_DELAY_MS)
+      }, delay)
       reconnectTimersRef.current.set(peerId, timer)
     },
     [isInitiator],
@@ -302,8 +327,10 @@ export function useCall({
       upsertFromPresence(self, { isLocal: true })
       setStream(self.peerId, localStream)
 
-      iceServersRef.current = await fetchIceServers()
+      const ice = await fetchIceServers()
       if (cancelledRef.current) return
+      iceServersRef.current = ice.iceServers
+      setTurnAvailable(ice.turnAvailable)
 
       peerManagerRef.current = buildPeerManager(localStream)
 
@@ -386,6 +413,13 @@ export function useCall({
         remoteFlagsRef.current.set(peerId, { audioEnabled, videoEnabled })
         patch(peerId, { audioEnabled, videoEnabled })
       },
+      onChannelDied: () => {
+        // The Realtime channel dropped server-side (not a local network blip,
+        // which the 'online' listener covers). Without this, presence and
+        // signaling silently stop while everyone thinks the room is healthy.
+        rtcLog('Call', 'signaling channel dropped — rejoining room')
+        rejoinRef.current()
+      },
     })
   }, [
     self,
@@ -466,23 +500,44 @@ export function useCall({
 
   // ---- Network resilience: rejoin on reconnect ----
   const rejoin = useCallback(async () => {
-    if (!peerManagerRef.current) return
-    setCallStatus('reconnecting')
+    if (rejoiningRef.current || !peerManagerRef.current) return
+    rejoiningRef.current = true
+    try {
+      setCallStatus('reconnecting')
 
-    reconnectTimersRef.current.forEach((t) => clearTimeout(t))
-    reconnectTimersRef.current.clear()
-    reconnectAttemptsRef.current.clear()
-    peerManagerRef.current.destroyAll()
-    joinedAtRef.current.clear()
-    creatingRef.current.clear()
-    pendingStreamsRef.current.clear()
-    remoteFlagsRef.current.clear()
-    clearRemote()
+      // Refresh ICE servers: TURN credentials may have expired — or recovered —
+      // since mount, and recreated peers should get the current set rather than
+      // retrying forever with a stale one.
+      const ice = await fetchIceServers()
+      // The room may unmount while we awaited (leave/navigation).
+      if (cancelledRef.current || !peerManagerRef.current) return
+      iceServersRef.current = ice.iceServers
+      setTurnAvailable(ice.turnAvailable)
+      peerManagerRef.current.setIceServers(ice.iceServers)
 
-    await signalingRef.current?.leave()
-    signalingRef.current = null
-    await join()
+      reconnectTimersRef.current.forEach((t) => clearTimeout(t))
+      reconnectTimersRef.current.clear()
+      reconnectAttemptsRef.current.clear()
+      peerManagerRef.current.destroyAll()
+      joinedAtRef.current.clear()
+      creatingRef.current.clear()
+      pendingStreamsRef.current.clear()
+      remoteFlagsRef.current.clear()
+      clearRemote()
+
+      await signalingRef.current?.leave()
+      signalingRef.current = null
+      await join()
+    } finally {
+      rejoiningRef.current = false
+    }
   }, [join, clearRemote])
+
+  // Keep the late-bound handle (used by onChannelDied) pointing at the latest
+  // rejoin closure.
+  useEffect(() => {
+    rejoinRef.current = () => void rejoin()
+  }, [rejoin])
 
   useEffect(() => {
     function onOnline() {
@@ -584,6 +639,7 @@ export function useCall({
     selfPeerId: self.peerId,
     inLobby: callStatus === 'idle',
     roomFull,
+    turnAvailable,
     chatMessages,
     sendChat,
     join,
