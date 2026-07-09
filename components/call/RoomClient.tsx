@@ -18,6 +18,7 @@ import { toast } from 'sonner'
 
 import { useCall } from '@/hooks/useCall'
 import { useAudioLevel } from '@/hooks/useAudioLevel'
+import { useBackGestureGuard } from '@/hooks/useBackGestureGuard'
 import { useDeviceCapabilities } from '@/hooks/useDeviceCapabilities'
 import { useWakeLock } from '@/hooks/useWakeLock'
 import { cn, getRoomUrl, isWebRTCSupported } from '@/lib/utils'
@@ -126,6 +127,25 @@ function CallExperience({ slug, roomName, maxParticipants, user }: RoomClientPro
   // Session chat: track unread while the panel is closed.
   const [chatOpen, setChatOpen] = useState(false)
   const [seenCount, setSeenCount] = useState(0)
+
+  // Back-swipe safety: while in the call, the browser back gesture must not
+  // navigate away (which unmounts the room and kills the call). Instead it
+  // closes the chat panel if open — the natural "back from chat" gesture on
+  // phones — or reminds how to actually leave. The lobby is exempt: backing
+  // out before joining is a normal exit.
+  const inActiveCall =
+    callStatus === 'connecting' ||
+    callStatus === 'connected' ||
+    callStatus === 'reconnecting'
+  useBackGestureGuard(inActiveCall, () => {
+    if (chatOpen) {
+      setChatOpen(false)
+      return
+    }
+    toast("You're still in the call — use the red button to leave", {
+      id: 'back-guard',
+    })
+  })
   useEffect(() => {
     if (chatOpen) setSeenCount(chatMessages.length)
   }, [chatOpen, chatMessages.length])
