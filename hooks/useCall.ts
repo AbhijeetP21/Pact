@@ -596,18 +596,28 @@ export function useCall({
     }
   }, [media, stopScreenShareInternal])
 
+  // Guards rapid double-taps on the flip button: a second call while the
+  // first is mid-acquisition would see zero video tracks (already stopped)
+  // and fire a spurious failure toast.
+  const flippingRef = useRef(false)
   const switchCamera = useCallback(async () => {
-    const newTrack = await media.switchCamera()
-    if (!newTrack) {
-      // Every acquisition attempt failed (camera busy/removed mid-switch). The
-      // old track is already stopped, so the local tile falls back to the
-      // avatar — tell the user rather than leaving them silently dark.
-      toast.error('Couldn’t switch camera. Try again.')
-      return
-    }
-    // Don't disturb the video sender while a screen share owns it.
-    if (!media.mediaState.screenSharing) {
-      await peerManagerRef.current?.replaceVideoTrack(newTrack)
+    if (flippingRef.current) return
+    flippingRef.current = true
+    try {
+      const newTrack = await media.switchCamera()
+      if (!newTrack) {
+        // Every acquisition attempt failed (camera grabbed by another app /
+        // hardware fault). useMedia has already flipped the state to
+        // camera-off, so the tile shows the avatar and peers are told.
+        toast.error('Camera unavailable — it may be in use by another app.')
+        return
+      }
+      // Don't disturb the video sender while a screen share owns it.
+      if (!media.mediaState.screenSharing) {
+        await peerManagerRef.current?.replaceVideoTrack(newTrack)
+      }
+    } finally {
+      flippingRef.current = false
     }
   }, [media])
 

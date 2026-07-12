@@ -130,6 +130,17 @@ export function useMedia() {
         localStream: manager.getLocalStream(),
         facingMode: manager.getFacingMode(),
       }))
+    } else if (!manager.hasVideo()) {
+      // Total flip failure: the old track was stopped and nothing replaced it.
+      // Reflect reality — camera off/gone — so the local tile shows the avatar,
+      // the media-flags broadcast tells peers, and the dead controls disappear
+      // instead of silently no-oping.
+      setMediaState((prev) => ({
+        ...prev,
+        videoEnabled: false,
+        hasCamera: false,
+        hasMultipleCameras: false,
+      }))
     }
     return track
   }, [manager])

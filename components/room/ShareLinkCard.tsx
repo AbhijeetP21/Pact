@@ -28,7 +28,10 @@ export function ShareLinkCard({ url }: { url: string }) {
         value={url}
         aria-label="Shareable room link"
         onFocus={(e) => e.currentTarget.select()}
-        className="font-mono text-xs"
+        // Override both of Input's responsive size slots: 16px on phones
+        // (sub-16px focused inputs trigger iOS force-zoom — this one is
+        // focusable and select-on-focus), compact mono on desktop.
+        className="font-mono text-base sm:text-xs"
       />
       <Button
         type="button"

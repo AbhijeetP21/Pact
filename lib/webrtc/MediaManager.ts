@@ -334,6 +334,14 @@ export class MediaManager {
       }
     }
     if (!newTrack) {
+      // Camera is genuinely gone (grabbed by another app / hardware fault).
+      // Strip the ended track from the outbound stream too, so tiles bound to
+      // it fall back to the avatar instead of rendering a dead video element.
+      if (this.localStream) {
+        for (const t of this.localStream.getVideoTracks()) {
+          this.localStream.removeTrack(t)
+        }
+      }
       rtcError('Media', 'camera switch failed and rollback failed; camera lost')
       return null
     }

@@ -151,7 +151,7 @@ export function ControlBar({
           <MessageSquare className="size-4 sm:size-5" />
         </ControlButton>
 
-        <div className="mx-1 h-6 w-px bg-white/10" />
+        <div className="mx-0.5 h-6 w-px shrink-0 bg-white/10 sm:mx-1" />
 
         <ControlButton onClick={onLeave} destructive label="Leave call">
           <PhoneOff className="size-4 sm:size-5" />
