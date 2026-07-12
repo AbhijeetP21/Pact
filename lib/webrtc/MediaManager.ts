@@ -259,10 +259,16 @@ export class MediaManager {
   }
 
   /**
-   * Flip between the front and rear camera (mobile). Acquires the other camera,
-   * swaps it into the raw + outbound streams, and returns the new video track
-   * so the caller can replaceTrack on its peers. Returns null if there's no
-   * camera or the switch fails (the existing track is left untouched).
+   * Flip between the front and rear camera (mobile). Returns the new video
+   * track so the caller can replaceTrack on its peers, or null when there's no
+   * camera at all.
+   *
+   * The old camera is stopped BEFORE the new one is requested: iOS (and many
+   * Android builds) allow only one open camera per page, so acquiring the
+   * other lens while the current one is live either fails outright or makes
+   * the OS kill the live track — the "flip turns my video off" bug. Because
+   * the old track is gone, every failure path here must re-acquire *something*
+   * (worst case the camera we started with) rather than returning early.
    *
    * Background blur is hidden on mobile, so this is always the no-blur path.
    */
@@ -270,46 +276,76 @@ export class MediaManager {
     if (!this.rawStream || this.rawStream.getVideoTracks().length === 0) {
       return null
     }
-    const next: FacingMode = this.facingMode === 'user' ? 'environment' : 'user'
+    const previous = this.facingMode
+    const next: FacingMode = previous === 'user' ? 'environment' : 'user'
+    const currentDeviceId = this.rawStream
+      .getVideoTracks()[0]
+      ?.getSettings().deviceId
 
-    // `exact` forces the OS to actually switch lenses. Many phones treat
-    // `ideal` as a soft hint and hand back the *same* camera, so the flip looks
-    // dead. Fall back to `ideal` for devices that can't satisfy `exact` (e.g. a
-    // tablet/laptop with a single camera), which simply re-acquires what we have.
-    let stream: MediaStream | null = null
-    for (const facingMode of [{ exact: next }, { ideal: next }] as const) {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { ...videoConstraints(next), facingMode },
-          audio: false,
-        })
-        break
-      } catch (err) {
-        rtcError('Media', `camera switch (${JSON.stringify(facingMode)}) failed`, err)
+    // Enumerate BEFORE stopping (labels/ids are stable while a track is live).
+    // Cycling by deviceId is the fallback for phones whose facingMode metadata
+    // is missing or wrong (seen on several Samsung/Moto builds).
+    let cycleDeviceId: string | undefined
+    try {
+      const cams = (await this.enumerateDevices()).filter(
+        (d) => d.kind === 'videoinput' && d.deviceId,
+      )
+      if (cams.length > 1 && currentDeviceId) {
+        const idx = cams.findIndex((d) => d.deviceId === currentDeviceId)
+        cycleDeviceId = cams[(idx + 1) % cams.length]?.deviceId
       }
-    }
-    if (!stream) {
-      rtcError('Media', 'camera switch failed; keeping current camera')
-      return null
+    } catch {
+      // enumeration unsupported — facingMode attempts still apply
     }
 
-    const newTrack = stream.getVideoTracks()[0] ?? null
-    if (!newTrack) return null
-    // Trust the camera we actually got, not the one we asked for. On a
-    // single-camera device the `exact` request fails and the `ideal` fallback
-    // hands back the same (front) camera — so report its true facing to keep
-    // the local tile's mirror correct.
-    const actual = newTrack.getSettings().facingMode
-    this.facingMode = actual === 'user' || actual === 'environment' ? actual : next
-    newTrack.enabled = this.videoEnabled
-
-    // Replace the raw camera track (stop the old one to release the device).
+    // Release the camera so the OS lets us open the other one.
     for (const t of this.rawStream.getVideoTracks()) {
       this.rawStream.removeTrack(t)
       t.stop()
     }
-    this.rawStream.addTrack(newTrack)
 
+    // Most-specific first; the second-to-last entry re-acquires the previous
+    // camera so a failed flip degrades to "nothing changed", and the last is
+    // any camera at all — recovering *some* video beats leaving the user dark.
+    const attempts: MediaTrackConstraints[] = [
+      { ...videoConstraints(next), facingMode: { exact: next } },
+      { ...videoConstraints(next), facingMode: { ideal: next } },
+    ]
+    if (cycleDeviceId) {
+      // deviceId and facingMode conflict — send size constraints only.
+      const size = { ...videoConstraints(next) }
+      delete size.facingMode
+      attempts.push({ ...size, deviceId: { exact: cycleDeviceId } })
+    }
+    attempts.push({ ...videoConstraints(previous), facingMode: { ideal: previous } })
+    attempts.push({})
+
+    let newTrack: MediaStreamTrack | null = null
+    for (const video of attempts) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video,
+          audio: false,
+        })
+        newTrack = stream.getVideoTracks()[0] ?? null
+        if (newTrack) break
+      } catch (err) {
+        rtcError('Media', `camera switch attempt failed`, err)
+      }
+    }
+    if (!newTrack) {
+      rtcError('Media', 'camera switch failed and rollback failed; camera lost')
+      return null
+    }
+
+    // Trust the camera we actually got, not the one we asked for, so the local
+    // tile's mirroring stays correct on single-camera devices.
+    const actual = newTrack.getSettings().facingMode
+    this.facingMode =
+      actual === 'user' || actual === 'environment' ? actual : next
+    newTrack.enabled = this.videoEnabled
+
+    this.rawStream.addTrack(newTrack)
     if (this.localStream) {
       for (const t of this.localStream.getVideoTracks()) {
         this.localStream.removeTrack(t)
@@ -317,7 +353,7 @@ export class MediaManager {
       this.localStream.addTrack(newTrack)
     }
 
-    rtcLog('Media', `switched camera to ${next}`)
+    rtcLog('Media', `switched camera to ${this.facingMode}`)
     return newTrack
   }
 

@@ -100,6 +100,23 @@ export function useMedia() {
   }, [manager])
 
   /**
+   * Set camera on/off to a specific state (not a toggle) — for callers that
+   * change it from the outside (e.g. background-tab auto-pause), so the local
+   * UI reflects reality. No-op if already in that state.
+   */
+  const setVideoEnabled = useCallback(
+    (enabled: boolean) => {
+      if (!manager.hasVideo()) return
+      setMediaState((prev) => {
+        if (prev.videoEnabled === enabled) return prev
+        manager.setTrackEnabled('video', enabled)
+        return { ...prev, videoEnabled: enabled }
+      })
+    },
+    [manager],
+  )
+
+  /**
    * Flip between front and rear camera (mobile). Returns the new video track so
    * the caller can swap it on its peer connections.
    */
@@ -148,6 +165,7 @@ export function useMedia() {
     acquireLocalStream,
     toggleAudio,
     toggleVideo,
+    setVideoEnabled,
     switchCamera,
     toggleNoiseSuppression,
     toggleBackgroundBlur,

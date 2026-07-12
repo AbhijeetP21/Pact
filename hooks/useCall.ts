@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { nanoid } from 'nanoid'
+import { toast } from 'sonner'
 
 import { PeerManager } from '@/lib/webrtc/PeerManager'
 import { SignalingService } from '@/lib/webrtc/SignalingService'
@@ -597,11 +598,44 @@ export function useCall({
 
   const switchCamera = useCallback(async () => {
     const newTrack = await media.switchCamera()
+    if (!newTrack) {
+      // Every acquisition attempt failed (camera busy/removed mid-switch). The
+      // old track is already stopped, so the local tile falls back to the
+      // avatar — tell the user rather than leaving them silently dark.
+      toast.error('Couldn’t switch camera. Try again.')
+      return
+    }
     // Don't disturb the video sender while a screen share owns it.
-    if (newTrack && !media.mediaState.screenSharing) {
+    if (!media.mediaState.screenSharing) {
       await peerManagerRef.current?.replaceVideoTrack(newTrack)
     }
   }, [media])
+
+  // Backgrounding the app (phone home screen, app switch) freezes the camera —
+  // peers would stare at a frozen frame while the stale video keeps eating
+  // uplink that the audio needs. Pause the camera while hidden (others see the
+  // avatar) and restore it when the app returns. Screen shares are exempt:
+  // presenting from another app/tab is the whole point of a share.
+  const hiddenPausedVideoRef = useRef(false)
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.hidden) {
+        if (
+          callStatus === 'connected' &&
+          media.mediaState.videoEnabled &&
+          !media.mediaState.screenSharing
+        ) {
+          hiddenPausedVideoRef.current = true
+          media.setVideoEnabled(false)
+        }
+      } else if (hiddenPausedVideoRef.current) {
+        hiddenPausedVideoRef.current = false
+        media.setVideoEnabled(true)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [callStatus, media])
 
   const toggleNoiseSuppression = useCallback(async () => {
     const newTrack = await media.toggleNoiseSuppression()
