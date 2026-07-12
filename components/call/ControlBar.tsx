@@ -58,10 +58,12 @@ export function ControlBar({
 }: ControlBarProps) {
   return (
     <div
-      className="pointer-events-none fixed inset-x-0 flex justify-center px-4"
+      className="pointer-events-none fixed inset-x-0 flex justify-center px-2 sm:px-4"
       style={{ bottom: 'calc(env(safe-area-inset-bottom) + 1rem)' }}
     >
-      <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-white/10 bg-zinc-900/90 p-2 shadow-lg backdrop-blur">
+      {/* Compact sizing under sm so all controls fit a narrow phone; the
+          overflow scroll is a last-resort safety net for tiny viewports. */}
+      <div className="pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-white/10 bg-zinc-900/90 p-1.5 shadow-lg backdrop-blur sm:gap-2 sm:p-2">
         <ControlButton
           active={!mediaState.audioEnabled}
           speaking={mediaState.audioEnabled && localSpeaking}
@@ -70,9 +72,9 @@ export function ControlBar({
           label={mediaState.audioEnabled ? 'Mute microphone' : 'Unmute microphone'}
         >
           {mediaState.audioEnabled ? (
-            <Mic className="size-5" />
+            <Mic className="size-4 sm:size-5" />
           ) : (
-            <MicOff className="size-5" />
+            <MicOff className="size-4 sm:size-5" />
           )}
         </ControlButton>
 
@@ -83,15 +85,15 @@ export function ControlBar({
           label={mediaState.videoEnabled ? 'Turn camera off' : 'Turn camera on'}
         >
           {mediaState.videoEnabled ? (
-            <Video className="size-5" />
+            <Video className="size-4 sm:size-5" />
           ) : (
-            <VideoOff className="size-5" />
+            <VideoOff className="size-4 sm:size-5" />
           )}
         </ControlButton>
 
         {isMobile && mediaState.hasCamera && mediaState.hasMultipleCameras && (
           <ControlButton onClick={onFlipCamera} label="Flip camera">
-            <SwitchCamera className="size-5" />
+            <SwitchCamera className="size-4 sm:size-5" />
           </ControlButton>
         )}
 
@@ -108,7 +110,7 @@ export function ControlBar({
                   : 'Noise cancellation off'
               }
             >
-              <AudioLines className="size-5" />
+              <AudioLines className="size-4 sm:size-5" />
             </ControlButton>
 
             <ControlButton
@@ -121,7 +123,7 @@ export function ControlBar({
                   : 'Background blur off'
               }
             >
-              <Aperture className="size-5" />
+              <Aperture className="size-4 sm:size-5" />
             </ControlButton>
           </>
         )}
@@ -135,7 +137,7 @@ export function ControlBar({
               mediaState.screenSharing ? 'Stop sharing screen' : 'Share screen'
             }
           >
-            <MonitorUp className="size-5" />
+            <MonitorUp className="size-4 sm:size-5" />
           </ControlButton>
         )}
 
@@ -146,13 +148,13 @@ export function ControlBar({
           label={chatOpen ? 'Close chat' : 'Open chat'}
           badge={chatUnread}
         >
-          <MessageSquare className="size-5" />
+          <MessageSquare className="size-4 sm:size-5" />
         </ControlButton>
 
-        <div className="mx-1 h-6 w-px bg-white/10" />
+        <div className="mx-0.5 h-6 w-px shrink-0 bg-white/10 sm:mx-1" />
 
         <ControlButton onClick={onLeave} destructive label="Leave call">
-          <PhoneOff className="size-5" />
+          <PhoneOff className="size-4 sm:size-5" />
         </ControlButton>
       </div>
     </div>
@@ -188,7 +190,7 @@ function ControlButton({
       aria-label={label}
       title={label}
       className={cn(
-        'relative flex size-11 items-center justify-center rounded-full text-white transition-colors',
+        'relative flex size-9 shrink-0 items-center justify-center rounded-full text-white transition-colors sm:size-11',
         'bg-white/5 hover:bg-white/10',
         active && !destructive && 'bg-red-500/90 hover:bg-red-500',
         highlight && active && 'bg-primary hover:bg-primary/90',

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { nanoid } from 'nanoid'
+import { toast } from 'sonner'
 
 import { PeerManager } from '@/lib/webrtc/PeerManager'
 import { SignalingService } from '@/lib/webrtc/SignalingService'
@@ -595,13 +596,56 @@ export function useCall({
     }
   }, [media, stopScreenShareInternal])
 
+  // Guards rapid double-taps on the flip button: a second call while the
+  // first is mid-acquisition would see zero video tracks (already stopped)
+  // and fire a spurious failure toast.
+  const flippingRef = useRef(false)
   const switchCamera = useCallback(async () => {
-    const newTrack = await media.switchCamera()
-    // Don't disturb the video sender while a screen share owns it.
-    if (newTrack && !media.mediaState.screenSharing) {
-      await peerManagerRef.current?.replaceVideoTrack(newTrack)
+    if (flippingRef.current) return
+    flippingRef.current = true
+    try {
+      const newTrack = await media.switchCamera()
+      if (!newTrack) {
+        // Every acquisition attempt failed (camera grabbed by another app /
+        // hardware fault). useMedia has already flipped the state to
+        // camera-off, so the tile shows the avatar and peers are told.
+        toast.error('Camera unavailable — it may be in use by another app.')
+        return
+      }
+      // Don't disturb the video sender while a screen share owns it.
+      if (!media.mediaState.screenSharing) {
+        await peerManagerRef.current?.replaceVideoTrack(newTrack)
+      }
+    } finally {
+      flippingRef.current = false
     }
   }, [media])
+
+  // Backgrounding the app (phone home screen, app switch) freezes the camera —
+  // peers would stare at a frozen frame while the stale video keeps eating
+  // uplink that the audio needs. Pause the camera while hidden (others see the
+  // avatar) and restore it when the app returns. Screen shares are exempt:
+  // presenting from another app/tab is the whole point of a share.
+  const hiddenPausedVideoRef = useRef(false)
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.hidden) {
+        if (
+          callStatus === 'connected' &&
+          media.mediaState.videoEnabled &&
+          !media.mediaState.screenSharing
+        ) {
+          hiddenPausedVideoRef.current = true
+          media.setVideoEnabled(false)
+        }
+      } else if (hiddenPausedVideoRef.current) {
+        hiddenPausedVideoRef.current = false
+        media.setVideoEnabled(true)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [callStatus, media])
 
   const toggleNoiseSuppression = useCallback(async () => {
     const newTrack = await media.toggleNoiseSuppression()
