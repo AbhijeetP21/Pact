@@ -62,8 +62,11 @@ export function ControlBar({
       style={{ bottom: 'calc(env(safe-area-inset-bottom) + 1rem)' }}
     >
       {/* Compact sizing under sm so all controls fit a narrow phone; the
-          overflow scroll is a last-resort safety net for tiny viewports. */}
-      <div className="pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-white/10 bg-zinc-900/90 p-1.5 shadow-lg backdrop-blur sm:gap-2 sm:p-2">
+          overflow-x scroll is a last-resort safety net for tiny viewports.
+          overflow-y must be pinned to hidden: a non-visible overflow-x makes
+          overflow-y default to auto, and the mic's animate-ping ring then
+          overflows the pill and shows a flickering vertical scrollbar. */}
+      <div className="pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto overflow-y-hidden rounded-full border border-white/10 bg-zinc-900/90 p-1.5 shadow-lg backdrop-blur sm:gap-2 sm:p-2">
         <ControlButton
           active={!mediaState.audioEnabled}
           speaking={mediaState.audioEnabled && localSpeaking}
